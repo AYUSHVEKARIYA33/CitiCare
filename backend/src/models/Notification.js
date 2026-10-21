@@ -6,7 +6,7 @@ const notificationSchema = new Schema(
     sender: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     type: {
       type: String,
-      enum: ['status_change', 'new_comment', 'assignment', 'announcement'],
+      enum: ['status_change', 'new_comment', 'assignment', 'announcement', 'contractor_assigned', 'estimate_update', 'verification'],
       required: true,
     },
     title: { type: String, required: true },
