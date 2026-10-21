@@ -32,6 +32,7 @@ export default function ContractorMap() {
   const { data: complaints = [], isLoading } = useComplaints();
 
   const [leafletLoaded, setLeafletLoaded] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
   const [search, setSearch] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('all');
@@ -87,7 +88,9 @@ export default function ContractorMap() {
         if (!matches) return;
       }
 
-      if (c.latitude && c.longitude && !Number.isNaN(c.latitude) && !Number.isNaN(c.longitude)) {
+      const lat = Number(c.latitude);
+      const lng = Number(c.longitude);
+      if (c.latitude !== null && c.longitude !== null && !Number.isNaN(lat) && !Number.isNaN(lng) && lat !== 0 && lng !== 0) {
         plotted.push(c);
       } else {
         unconfirmed.push(c);
@@ -103,6 +106,9 @@ export default function ContractorMap() {
     const L = window.L;
 
     if (!mapInstanceRef.current) {
+      const container = document.getElementById('contractor-leaflet-map');
+      if (!container) return;
+
       const defaultCenter = [21.1702, 72.8311]; // Surat, India
       const map = L.map('contractor-leaflet-map', {
         zoomControl: false,
@@ -118,54 +124,67 @@ export default function ContractorMap() {
       const markerGroup = L.layerGroup().addTo(map);
       mapInstanceRef.current = map;
       markerGroupRef.current = markerGroup;
+      setMapReady(true);
+
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 250);
     }
   }, [leafletLoaded]);
 
   // 3. Render Status-Coloured Markers
   useEffect(() => {
-    if (!mapInstanceRef.current || !markerGroupRef.current || !window.L) return;
+    if (!mapReady || !mapInstanceRef.current || !markerGroupRef.current || !window.L) return;
     const L = window.L;
+    const map = mapInstanceRef.current;
     const markerGroup = markerGroupRef.current;
     markerGroup.clearLayers();
+
+    map.invalidateSize();
 
     if (plottedJobs.length === 0) return;
 
     const bounds = [];
 
     plottedJobs.forEach((job) => {
-      const lat = job.latitude;
-      const lng = job.longitude;
+      const lat = Number(job.latitude);
+      const lng = Number(job.longitude);
+      if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+
       bounds.push([lat, lng]);
 
-      const statusMeta = statusColorMap[job.contractor_status] || { color: '#64748b', label: 'Assigned' };
+      const statusMeta =
+        statusColorMap[job.contractor_status] ||
+        (job.status === 'resolved'
+          ? statusColorMap.verified
+          : { color: '#f59e0b', label: 'Needs Acceptance', bg: 'bg-amber-500/10 text-amber-600 border-amber-500/20' });
       const color = statusMeta.color;
 
-      // Custom pulsing status pin
+      // Custom status pin with icon
       const iconHtml = `
-        <div style="position: relative; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+        <div style="position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
           <div style="
             position: absolute;
-            width: 32px;
-            height: 32px;
+            width: 34px;
+            height: 34px;
             border-radius: 50%;
             background-color: ${color};
-            opacity: 0.25;
-            animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+            opacity: 0.35;
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
           "></div>
           <div style="
             position: relative;
-            width: 24px;
-            height: 24px;
+            width: 26px;
+            height: 26px;
             border-radius: 50%;
             background-color: ${color};
             border: 2.5px solid #ffffff;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
             display: flex;
             align-items: center;
             justify-content: center;
             color: #ffffff;
-            font-size: 11px;
-            font-weight: bold;
+            font-size: 13px;
           ">
             🔧
           </div>
@@ -175,22 +194,53 @@ export default function ContractorMap() {
       const customIcon = L.divIcon({
         className: 'custom-contractor-pin',
         html: iconHtml,
-        iconSize: [34, 34],
-        iconAnchor: [17, 17],
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
       });
 
       const marker = L.marker([lat, lng], { icon: customIcon }).addTo(markerGroup);
 
+      // Popup
+      const popupHtml = `
+        <div style="min-width: 200px; font-family: system-ui, -apple-system, sans-serif; font-size: 12px; line-height: 1.4;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px;">
+            <strong style="color: #06038D;">#${job.complaint_number}</strong>
+            <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: ${color}20; color: ${color}; font-weight: 700;">
+              ${statusMeta.label}
+            </span>
+          </div>
+          <div style="font-weight: 600; color: #0f172a; margin-bottom: 4px;">${job.title}</div>
+          <div style="color: #64748b; font-size: 11px; margin-bottom: 8px;">📍 ${job.address || 'Address unlisted'}</div>
+          <a href="https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}" target="_blank" rel="noopener noreferrer"
+             style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: #2563eb; color: #ffffff; border-radius: 5px; font-size: 11px; text-decoration: none; font-weight: 600;">
+            🧭 Get Directions
+          </a>
+        </div>
+      `;
+      marker.bindPopup(popupHtml);
+
       marker.on('click', () => {
         setSelectedJob(job);
-        mapInstanceRef.current.setView([lat, lng], 15, { animate: true });
+        map.setView([lat, lng], 16, { animate: true });
+        marker.openPopup();
       });
     });
 
     if (bounds.length > 0 && !selectedJob) {
-      mapInstanceRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+      if (bounds.length === 1) {
+        map.setView(bounds[0], 15);
+      } else {
+        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+      }
     }
-  }, [plottedJobs, selectedJob]);
+  }, [mapReady, plottedJobs, selectedJob]);
+
+  const handleFocusJob = (job) => {
+    setSelectedJob(job);
+    if (mapInstanceRef.current && job.latitude && job.longitude) {
+      mapInstanceRef.current.setView([Number(job.latitude), Number(job.longitude)], 16, { animate: true });
+    }
+  };
 
   // Handle "Get Directions" via Google Maps
   const openDirections = (job) => {
@@ -414,14 +464,99 @@ export default function ContractorMap() {
               </CardContent>
             </Card>
           ) : (
-            <Card className="shadow-card border-border p-5 text-center">
-              <MapPin className="h-10 w-10 text-muted-foreground/40 mx-auto mb-2" />
-              <h4 className="text-sm font-semibold">Click a map pin to view site directions</h4>
-              <p className="text-xs text-muted-foreground mt-1">
-                Select any marker to inspect job instructions, priority, and launch turn-by-turn navigation.
+            <Card className="shadow-card border-border p-4 text-center">
+              <MapPin className="h-8 w-8 text-muted-foreground/40 mx-auto mb-1.5" />
+              <h4 className="text-sm font-semibold">Click a pin or list item to view directions</h4>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Select any marker below to inspect work instructions and launch turn-by-turn navigation.
               </p>
             </Card>
           )}
+
+          {/* Assigned Work Sites List Card */}
+          <Card className="shadow-card border-primary/20 bg-card">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-bold flex items-center gap-2 text-foreground">
+                  <HardHat className="h-4 w-4 text-primary shrink-0" />
+                  Assigned Work Sites ({plottedJobs.length})
+                </CardTitle>
+                <Badge variant="outline" className="text-[11px] font-semibold text-primary">
+                  {plottedJobs.length} Mapped
+                </Badge>
+              </div>
+              <CardDescription className="text-xs">
+                Active jobs with verified GPS coordinates. Tap to focus on map.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+              {plottedJobs.length === 0 ? (
+                <div className="text-xs text-muted-foreground py-3 text-center">
+                  No mapped jobs match your current filters.
+                </div>
+              ) : (
+                plottedJobs.map((job) => {
+                  const statusMeta =
+                    statusColorMap[job.contractor_status] ||
+                    (job.status === 'resolved'
+                      ? statusColorMap.verified
+                      : { color: '#f59e0b', label: 'Needs Acceptance', bg: 'bg-amber-500/10 text-amber-600' });
+                  const isSelected = selectedJob?.id === job.id;
+
+                  return (
+                    <div
+                      key={job.id}
+                      onClick={() => handleFocusJob(job)}
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer flex flex-col gap-1.5 text-xs ${
+                        isSelected
+                          ? 'border-primary bg-primary/10 shadow-sm'
+                          : 'border-border/70 hover:border-primary/40 bg-background/80 hover:bg-muted/40'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-bold text-foreground">#{job.complaint_number}</span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                            statusMeta.bg || 'bg-muted text-muted-foreground'
+                          }`}
+                        >
+                          {statusMeta.label}
+                        </span>
+                      </div>
+                      <div className="font-medium text-foreground truncate">{job.title}</div>
+                      <div className="text-[11px] text-muted-foreground truncate flex items-center gap-1">
+                        <MapPin className="h-3 w-3 shrink-0" />
+                        {job.address || 'Address not specified'}
+                      </div>
+                      <div className="flex items-center gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-6 text-[11px] px-2 flex items-center gap-1"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleFocusJob(job);
+                          }}
+                        >
+                          <Eye className="h-3 w-3" /> Focus Pin
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-6 text-[11px] px-2 bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDirections(job);
+                          }}
+                        >
+                          <Navigation className="h-3 w-3" /> Directions
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </CardContent>
+          </Card>
 
           {/* Location Needs Confirmation Panel */}
           <Card className="shadow-card border-amber-500/30 bg-amber-500/5">
@@ -434,7 +569,7 @@ export default function ContractorMap() {
                 These complaints lack verified GPS coordinates. Refer to textual addresses or contact Department Head.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+            <CardContent className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
               {unconfirmedJobs.length === 0 ? (
                 <div className="text-xs text-muted-foreground py-2 text-center">
                   All assigned complaints have verified coordinates!
@@ -459,6 +594,23 @@ export default function ContractorMap() {
           </Card>
         </div>
       </div>
+
+      {/* Global override style for custom leaflet pins */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+            .custom-contractor-pin {
+              background: transparent !important;
+              border: none !important;
+            }
+            .leaflet-popup-content-wrapper {
+              border-radius: 12px;
+              box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.25);
+              padding: 4px;
+            }
+          `,
+        }}
+      />
     </div>
   );
 }

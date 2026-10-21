@@ -999,16 +999,24 @@ export async function updateComplaint(req, res) {
         }
       }
 
-      // 2. Budget Approval / Rejection: Admin only
+      // 2. Budget Approval / Rejection / Review: Admin or Department Head of this department
       if (cost_status !== undefined) {
-        if ((cost_status === 'approved' || cost_status === 'rejected') && !isAdmin) {
-          res.status(403).json({ error: 'Only administrators can approve or reject complaint cost estimates' });
-          return;
+        if (cost_status === 'approved' || cost_status === 'rejected') {
+          if (!isAdmin && !isDeptHeadOfThisDept) {
+            res.status(403).json({ error: 'Only administrators or the department head can approve or reject complaint cost estimates' });
+            return;
+          }
+        }
+        if (cost_status === 'reviewed') {
+          if (!isAdmin && !isDeptHeadOfThisDept) {
+            res.status(403).json({ error: 'Only the department head or administrator can mark estimates as reviewed' });
+            return;
+          }
         }
         if (cost_status === 'submitted') {
           // Only assigned officer, department head of this department, or admin can submit costs
           if (!isAdmin && !isDeptHeadOfThisDept && !isAssigned) {
-            res.status(403).json({ error: 'Only the assigned officer or department head can submit cost estimates' });
+            res.status(403).json({ error: 'Only the assigned officer, contractor, or department head can submit cost estimates' });
             return;
           }
         }

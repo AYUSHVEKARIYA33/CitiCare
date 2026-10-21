@@ -158,7 +158,12 @@ export function DepartmentWorkPanel({ complaint }) {
     }
   };
 
-  // 5. Admin Budget Approval / Rejection
+  const [showManualEstimate, setShowManualEstimate] = useState(false);
+  const [manualAmount, setManualAmount] = useState(complaint.cost_estimated_amount || '');
+  const [manualMaterials, setManualMaterials] = useState(complaint.cost_materials || '');
+  const [manualLabor, setManualLabor] = useState(complaint.cost_labor || '');
+
+  // 5. Budget Approval / Review / Rejection
   const handleBudgetDecision = async (decision) => {
     try {
       await updateComplaint.mutateAsync({
@@ -166,12 +171,43 @@ export function DepartmentWorkPanel({ complaint }) {
         cost_status: decision,
       });
       toast({
-        title: decision === 'approved' ? 'Budget Approved' : 'Budget Rejected',
+        title: decision === 'approved' ? 'Cost Approved' : decision === 'reviewed' ? 'Estimate Reviewed' : 'Estimate Rejected',
         description: `Estimate has been marked as ${decision}.`,
       });
     } catch (e) {
       toast({
         title: 'Action failed',
+        description: e.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleSaveAndApproveManualEstimate = async (targetStatus = 'approved') => {
+    if (!manualAmount || Number(manualAmount) <= 0) {
+      toast({
+        title: 'Amount required',
+        description: 'Please enter a valid estimated amount.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    try {
+      await updateComplaint.mutateAsync({
+        id: complaint.id,
+        cost_estimated_amount: Number(manualAmount),
+        cost_materials: manualMaterials || undefined,
+        cost_labor: manualLabor || undefined,
+        cost_status: targetStatus,
+      });
+      toast({
+        title: targetStatus === 'approved' ? 'Estimate Saved & Approved' : 'Estimate Submitted',
+        description: `Estimate of ₹${manualAmount} saved.`,
+      });
+      setShowManualEstimate(false);
+    } catch (e) {
+      toast({
+        title: 'Failed to save estimate',
         description: e.message || 'Please try again.',
         variant: 'destructive',
       });
@@ -423,7 +459,7 @@ export function DepartmentWorkPanel({ complaint }) {
       )}
 
       {/* SECTION: ESTIMATE REVIEW & BUDGET APPROVAL */}
-      {complaint.cost_status && complaint.cost_status !== 'pending' && (
+      {complaint.cost_status && complaint.cost_status !== 'pending' ? (
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-sm flex items-center gap-2">
@@ -437,10 +473,12 @@ export function DepartmentWorkPanel({ complaint }) {
                   ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
                   : complaint.cost_status === 'rejected'
                   ? 'bg-red-500/10 text-red-600 border-red-500/20'
+                  : complaint.cost_status === 'reviewed'
+                  ? 'bg-blue-500/10 text-blue-600 border-blue-500/20'
                   : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
               }
             >
-              {complaint.cost_status.toUpperCase()}
+              {complaint.cost_status === 'reviewed' ? 'REVIEWED BY HEAD' : complaint.cost_status.toUpperCase()}
             </Badge>
           </div>
 
@@ -459,9 +497,9 @@ export function DepartmentWorkPanel({ complaint }) {
             </div>
           </div>
 
-          {/* Admin Budget Approval Action */}
-          {isAdmin && complaint.cost_status === 'submitted' && (
-            <div className="pt-2 flex items-center gap-2">
+          {/* Budget Decision Actions for Admin and Department Head */}
+          {(isAdmin || isDeptHead) && (complaint.cost_status === 'submitted' || complaint.cost_status === 'reviewed') && (
+            <div className="pt-2 flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
                 className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
@@ -469,8 +507,20 @@ export function DepartmentWorkPanel({ complaint }) {
                 disabled={updateComplaint.isPending}
               >
                 <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                Approve Budget (Admin)
+                {isAdmin ? 'Approve Budget (Admin)' : 'Approve Cost Estimate (Head)'}
               </Button>
+              {isDeptHead && complaint.cost_status === 'submitted' && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-xs text-blue-600 border-blue-500/40 hover:bg-blue-50"
+                  onClick={() => handleBudgetDecision('reviewed')}
+                  disabled={updateComplaint.isPending}
+                >
+                  <FileText className="h-3.5 w-3.5 mr-1" />
+                  Review & Recommend to Admin
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="destructive"
@@ -484,12 +534,93 @@ export function DepartmentWorkPanel({ complaint }) {
             </div>
           )}
 
-          {!isAdmin && complaint.cost_status === 'submitted' && (
-            <p className="text-[11px] text-muted-foreground italic">
-              Estimate is currently pending final municipal administrator budget approval.
-            </p>
+          {complaint.cost_status === 'approved' && (
+            <div className="text-xs text-emerald-600 font-medium flex items-center gap-1.5 pt-1">
+              <CheckCircle className="h-4 w-4" />
+              Budget approved and allocated for field execution.
+            </div>
           )}
         </div>
+      ) : (
+        /* When estimate is pending, allow Head / Admin to directly set and approve */
+        (isAdmin || isDeptHead) && (
+          <div className="rounded-xl border border-dashed border-border p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-semibold flex items-center gap-1.5">
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                  Cost Estimate & Budget
+                </h4>
+                <p className="text-xs text-muted-foreground">
+                  Awaiting contractor estimate submission, or set/approve directly as Department Head/Admin.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs"
+                onClick={() => setShowManualEstimate(!showManualEstimate)}
+              >
+                {showManualEstimate ? 'Cancel' : '+ Set / Approve Estimate'}
+              </Button>
+            </div>
+
+            {showManualEstimate && (
+              <div className="space-y-3 pt-2 border-t border-border/60">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <Label className="text-xs">Amount (₹) *</Label>
+                    <Input
+                      type="number"
+                      placeholder="e.g. 15000"
+                      value={manualAmount}
+                      onChange={(e) => setManualAmount(e.target.value)}
+                      className="text-xs h-8 bg-background"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Materials</Label>
+                    <Input
+                      placeholder="e.g. Cement, pipes"
+                      value={manualMaterials}
+                      onChange={(e) => setManualMaterials(e.target.value)}
+                      className="text-xs h-8 bg-background"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Labor</Label>
+                    <Input
+                      placeholder="e.g. 4 workers, 2 days"
+                      value={manualLabor}
+                      onChange={(e) => setManualLabor(e.target.value)}
+                      className="text-xs h-8 bg-background"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
+                    onClick={() => handleSaveAndApproveManualEstimate('approved')}
+                    disabled={updateComplaint.isPending || !manualAmount}
+                  >
+                    <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                    Save & Approve Cost
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs"
+                    onClick={() => handleSaveAndApproveManualEstimate('submitted')}
+                    disabled={updateComplaint.isPending || !manualAmount}
+                  >
+                    Save as Estimate Only
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {/* SECTION: WORK VERIFICATION & QUALITY AUDIT */}

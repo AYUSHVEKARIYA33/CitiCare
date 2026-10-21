@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useComplaint, useComplaintComments, useAddComment, useSubmitComplaintFeedback } from '@/hooks/useComplaints';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -6,7 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { StaffActionsPanel } from '@/components/complaint/StaffActionsPanel';
 import { DepartmentWorkPanel } from '@/components/complaint/DepartmentWorkPanel';
-import { ArrowLeft, MapPin, Calendar, User, Building2, MessageSquare, Star, Send, CheckCircle, Clock, AlertCircle, FileCheck, Loader2, ImageIcon, } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, User, Building2, MessageSquare, Star, Send, CheckCircle, Clock, AlertCircle, FileCheck, Loader2, ImageIcon, HardHat } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';

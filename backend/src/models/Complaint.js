@@ -52,7 +52,7 @@ const complaintSchema = new Schema(
 		cost_estimated_amount: { type: Number, default: null },
 		cost_materials: { type: String, default: null },
 		cost_labor: { type: String, default: null },
-		cost_status: { type: String, enum: ['pending', 'submitted', 'approved', 'rejected'], default: 'pending' },
+		cost_status: { type: String, enum: ['pending', 'submitted', 'reviewed', 'approved', 'rejected'], default: 'pending' },
 		cost_submitted_at: { type: Date, default: null },
 		cost_approved_by: { type: Schema.Types.ObjectId, ref: 'User', default: null },
 		completion_remarks: { type: String, default: null },
