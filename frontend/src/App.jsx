@@ -23,6 +23,10 @@ import CityMap from "./pages/CityMap";
 import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
+import ContractorDashboard from "./pages/contractor/ContractorDashboard";
+import ContractorJobs from "./pages/contractor/ContractorJobs";
+import ContractorMap from "./pages/contractor/ContractorMap";
+import ContractorNotifications from "./pages/contractor/ContractorNotifications";
 
 const queryClient = new QueryClient();
 
@@ -39,6 +43,11 @@ const App = () => (
             <Route path="/register" element={<Register />} />
             <Route element={<DashboardLayout />}>
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/contractor" element={<ContractorDashboard />} />
+              <Route path="/contractor/dashboard" element={<ContractorDashboard />} />
+              <Route path="/contractor/jobs" element={<ContractorJobs />} />
+              <Route path="/contractor/map" element={<ContractorMap />} />
+              <Route path="/contractor/notifications" element={<ContractorNotifications />} />
               <Route path="/complaints" element={<Complaints />} />
               <Route path="/track" element={<Complaints />} />
               <Route path="/complaints/new" element={<NewComplaint />} />

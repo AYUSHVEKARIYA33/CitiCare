@@ -52,7 +52,7 @@ export async function authorizeComplaintUpload(req, res, next) {
       return;
     }
 
-    const complaint = await Complaint.findById(complaintId).select('user_id department_id assigned_to status');
+    const complaint = await Complaint.findById(complaintId).select('user_id department_id assigned_to assigned_contractor_id status');
     if (!complaint) {
       res.status(404).json({ error: 'Complaint not found' });
       return;
@@ -62,10 +62,11 @@ export async function authorizeComplaintUpload(req, res, next) {
     const userId = req.user?.id;
     const isOwner = complaint.user_id && complaint.user_id.toString() === userId;
     const isAdmin = userRole === 'admin';
-    const isAssigned = complaint.assigned_to && complaint.assigned_to.toString() === userId;
+    const isAssigned = (complaint.assigned_to && complaint.assigned_to.toString() === userId) ||
+      (complaint.assigned_contractor_id && complaint.assigned_contractor_id.toString() === userId);
     const isDeptHead = userRole === 'department_head' && req.user?.department_id && complaint.department_id && complaint.department_id.toString() === req.user.department_id.toString();
 
-    // Only authorized staff or complaint owner can upload files
+    // Only authorized staff, assigned contractor, or complaint owner can upload files
     if (!isAdmin && !isDeptHead && !isAssigned && !isOwner) {
       res.status(403).json({ error: 'You do not have permission to upload files for this complaint' });
       return;

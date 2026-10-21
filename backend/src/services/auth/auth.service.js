@@ -35,6 +35,8 @@ function toPublicUser(user) {
     zone_id: user.zone_id?.toString() ?? null,
     phone: user.phone ?? null,
     avatar_url: user.avatar_url ?? null,
+    availability: user.availability ?? 'available',
+    contractor_company: user.contractor_company ?? null,
   };
 }
 

@@ -19,6 +19,7 @@ import analyticsRoutes from './routes/analytics.js';
 import aiRoutes from './routes/ai.js';
 import announcementsRoutes from './routes/announcements.js';
 import notificationsRoutes from './routes/notifications.js';
+import contractorsRoutes from './routes/contractors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -95,6 +96,7 @@ if (process.env.DBLESS !== 'true') {
   app.use('/api/ai', aiRoutes);
   app.use('/api/announcements', announcementsRoutes);
   app.use('/api/notifications', notificationsRoutes);
+  app.use('/api/contractors', contractorsRoutes);
 
   // Fallback routes without /api prefix (for frontend clients configured with origin baseURL)
   app.use('/auth', authRoutes);
@@ -110,6 +112,7 @@ if (process.env.DBLESS !== 'true') {
   app.use('/ai', aiRoutes);
   app.use('/announcements', announcementsRoutes);
   app.use('/notifications', notificationsRoutes);
+  app.use('/contractors', contractorsRoutes);
 } else {
   console.warn('[app] DBLESS=true — real API routes will not be mounted (dev stubs expected)');
 }

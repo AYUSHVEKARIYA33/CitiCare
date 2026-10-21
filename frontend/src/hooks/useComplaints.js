@@ -318,3 +318,38 @@ export function useOfficers(departmentId) {
     },
   });
 }
+
+export function useContractors(departmentId) {
+  return useQuery({
+    queryKey: ['contractors', departmentId],
+    queryFn: async () => {
+      const params = departmentId ? { departmentId } : {};
+      const { data } = await api.get('/contractors', { params });
+      return data;
+    },
+  });
+}
+
+export function useContractorStats() {
+  return useQuery({
+    queryKey: ['contractor-stats'],
+    queryFn: async () => {
+      const { data } = await api.get('/contractors/stats');
+      return data;
+    },
+  });
+}
+
+export function useUpdateContractor() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }) => {
+      const { data } = await api.patch(`/contractors/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['contractors'] });
+      queryClient.invalidateQueries({ queryKey: ['contractor-stats'] });
+    },
+  });
+}

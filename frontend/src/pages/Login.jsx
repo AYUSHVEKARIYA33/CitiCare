@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
-import { Shield, Eye, EyeOff, Loader2, User, Building2 } from 'lucide-react';
+import { Shield, Eye, EyeOff, Loader2, User, Building2, HardHat } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 export default function Login() {
     const [loginType, setLoginType] = useState('citizen');
@@ -13,14 +13,20 @@ export default function Login() {
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
-    const { login, isAuthenticated } = useAuth();
+    const { login, isAuthenticated, user } = useAuth();
     const navigate = useNavigate();
     const { toast } = useToast();
     useEffect(() => {
         if (isAuthenticated) {
-            navigate('/dashboard');
+            if (user?.role === 'contractor') {
+                navigate('/contractor');
+            } else if ((user?.role === 'officer' || user?.role === 'department_head') && user?.department_id) {
+                navigate('/department');
+            } else {
+                navigate('/dashboard');
+            }
         }
-    }, [isAuthenticated, navigate]);
+    }, [isAuthenticated, user, navigate]);
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
@@ -38,7 +44,10 @@ export default function Login() {
                 title: 'Welcome back!',
                 description: 'You have successfully logged in.',
             });
-            if (loggedInUser &&
+            if (loggedInUser && loggedInUser.role === 'contractor') {
+                navigate('/contractor');
+            }
+            else if (loggedInUser &&
                 (loggedInUser.role === 'officer' || loggedInUser.role === 'department_head') &&
                 loggedInUser.department_id) {
                 navigate('/department');
@@ -117,14 +126,18 @@ export default function Login() {
           </div>
 
           <Tabs value={loginType} onValueChange={(v) => setLoginType(v)} className="w-full mb-6">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="citizen" className="flex items-center gap-2">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="citizen" className="flex items-center gap-1.5 text-xs sm:text-sm">
                 <User className="h-4 w-4"/>
                 Citizen
               </TabsTrigger>
-              <TabsTrigger value="department" className="flex items-center gap-2">
+              <TabsTrigger value="department" className="flex items-center gap-1.5 text-xs sm:text-sm">
                 <Building2 className="h-4 w-4"/>
                 Department
+              </TabsTrigger>
+              <TabsTrigger value="contractor" className="flex items-center gap-1.5 text-xs sm:text-sm">
+                <HardHat className="h-4 w-4"/>
+                Contractor
               </TabsTrigger>
             </TabsList>
             <TabsContent value="citizen" className="mt-3">
@@ -134,7 +147,12 @@ export default function Login() {
             </TabsContent>
             <TabsContent value="department" className="mt-3">
               <p className="text-sm text-muted-foreground text-center">
-                Road, Water, Electricity, Sanitation, etc. Use the email and password provided by your administrator.
+                Municipal Department Heads & Officers. Manage department complaints, allocations, and approvals.
+              </p>
+            </TabsContent>
+            <TabsContent value="contractor" className="mt-3">
+              <p className="text-sm text-muted-foreground text-center">
+                Field Contractors & Execution Agencies. Access assigned jobs, work map, submit estimates and completion.
               </p>
             </TabsContent>
           </Tabs>

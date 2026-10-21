@@ -20,6 +20,7 @@ const roleColors = {
     admin: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
     department_head: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
     officer: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+    contractor: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
     citizen: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
 };
 export default function UsersPage() {
@@ -192,15 +193,16 @@ export default function UsersPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="citizen">Citizen</SelectItem>
+                    <SelectItem value="contractor">Contractor (Field Execution)</SelectItem>
                     <SelectItem value="officer">Officer</SelectItem>
                     <SelectItem value="department_head">Department Head</SelectItem>
                     <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              {(newUser.role === 'officer' || newUser.role === 'department_head') && (<>
+              {(newUser.role === 'officer' || newUser.role === 'department_head' || newUser.role === 'contractor') && (<>
                   <p className="text-xs text-muted-foreground bg-muted/50 rounded-md p-2">
-                    Email and password above are this user&apos;s login credentials. They will sign in on the login page by choosing &quot;Department&quot; and entering these credentials.
+                    Email and password above are this user&apos;s login credentials. {newUser.role === 'contractor' ? 'Contractors will sign in using the "Contractor" tab.' : 'Department staff will sign in using the "Department" tab.'}
                   </p>
                   <div className="space-y-2">
                     <Label htmlFor="department">Department</Label>
@@ -333,6 +335,7 @@ export default function UsersPage() {
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="citizen">Citizen</SelectItem>
+                            <SelectItem value="contractor">Contractor</SelectItem>
                             <SelectItem value="officer">Officer</SelectItem>
                             <SelectItem value="department_head">Dept Head</SelectItem>
                             <SelectItem value="admin">Admin</SelectItem>
@@ -342,7 +345,7 @@ export default function UsersPage() {
                         </Badge>)}
                     </TableCell>
                     <TableCell>
-                      {(u.role === 'officer' || u.role === 'department_head') ? (<Select value={u.department_id || 'none'} onValueChange={(value) => handleUpdateDepartment(u.id, value === 'none' ? null : value)}>
+                      {(u.role === 'officer' || u.role === 'department_head' || u.role === 'contractor') ? (<Select value={u.department_id || 'none'} onValueChange={(value) => handleUpdateDepartment(u.id, value === 'none' ? null : value)}>
                           <SelectTrigger className="w-40">
                             <SelectValue placeholder="No department"/>
                           </SelectTrigger>

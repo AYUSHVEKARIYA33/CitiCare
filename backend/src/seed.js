@@ -211,6 +211,79 @@ async function seed() {
 
 	console.log(`Department in-charge officers ensured for departments: ${linkedHeads}`);
 
+	const defaultContractors = {
+		ROADS: [
+			{ name: 'Ramesh Patel (Surat Roadways)', email: 'roads.contractor1@citicare.local', phone: '+91 98250 11001', company: 'Surat Roadways Infra' },
+			{ name: 'Kishore Dave (Apex Paving)', email: 'roads.contractor2@citicare.local', phone: '+91 98250 11002', company: 'Apex Paving Works' },
+		],
+		WATER: [
+			{ name: 'Bhavin Shah (AquaFlow Solutions)', email: 'water.contractor1@citicare.local', phone: '+91 98250 22001', company: 'AquaFlow Pipeline Solutions' },
+			{ name: 'Sanjay Mehta (Blue River Utilities)', email: 'water.contractor2@citicare.local', phone: '+91 98250 22002', company: 'Blue River Utilities' },
+		],
+		ELECTRIC: [
+			{ name: 'Dinesh Joshi (Gujarat PowerGrid)', email: 'electricity.contractor1@citicare.local', phone: '+91 98250 33001', company: 'Gujarat PowerGrid Works' },
+			{ name: 'Naveen Solanki (BrightVolt)', email: 'electricity.contractor2@citicare.local', phone: '+91 98250 33002', company: 'BrightVolt Electricals' },
+		],
+		GARBAGE: [
+			{ name: 'Mukesh Yadav (CleanCity Fleet)', email: 'garbage.contractor1@citicare.local', phone: '+91 98250 44001', company: 'CleanCity Sanitation Fleet' },
+			{ name: 'Kamlesh Rana (GreenEarth Waste)', email: 'garbage.contractor2@citicare.local', phone: '+91 98250 44002', company: 'GreenEarth Waste Handling' },
+		],
+		SEWAGE: [
+			{ name: 'Pravin Gohil (Surat Drainage)', email: 'sewage.contractor1@citicare.local', phone: '+91 98250 55001', company: 'Surat Drainage Specialists' },
+			{ name: 'Ashok Varma (DeepFlow Civil)', email: 'sewage.contractor2@citicare.local', phone: '+91 98250 55002', company: 'DeepFlow Civil Works' },
+		],
+		LIGHTS: [
+			{ name: 'Sunil Rao (Lumina Lighting)', email: 'lights.contractor1@citicare.local', phone: '+91 98250 66001', company: 'Lumina Urban Lighting' },
+			{ name: 'Gaurav Kulkarni (RayBeam Lights)', email: 'lights.contractor2@citicare.local', phone: '+91 98250 66002', company: 'RayBeam Municipal Lights' },
+		],
+		PARKS: [
+			{ name: 'Haresh Trivedi (GreenVistas)', email: 'parks.contractor1@citicare.local', phone: '+91 98250 77001', company: 'GreenVistas Landscaping' },
+			{ name: 'Chetan Prajapati (FloraCare)', email: 'parks.contractor2@citicare.local', phone: '+91 98250 77002', company: 'FloraCare Horticulture' },
+		],
+		OTHER: [
+			{ name: 'Manoj Chauhan (Universal Repairs)', email: 'other.contractor1@citicare.local', phone: '+91 98250 88001', company: 'Universal Civic Repairs' },
+			{ name: 'Deepak Parmar (SwiftAction)', email: 'other.contractor2@citicare.local', phone: '+91 98250 88002', company: 'SwiftAction Maintenance' },
+		],
+	};
+
+	let seededContractors = 0;
+	const contractorPassword = process.env.INITIAL_CONTRACTOR_PASSWORD || 'contractor123';
+
+	for (const dept of allDepartments) {
+		const list = defaultContractors[dept.code] || [
+			{
+				name: `${dept.name} Contractor A`,
+				email: `${dept.code.toLowerCase()}.contractor1@citicare.local`,
+				phone: '+91 98250 99001',
+				company: `${dept.name} Prime Contractor`,
+			},
+			{
+				name: `${dept.name} Contractor B`,
+				email: `${dept.code.toLowerCase()}.contractor2@citicare.local`,
+				phone: '+91 98250 99002',
+				company: `${dept.name} Allied Services`,
+			},
+		];
+
+		for (const c of list) {
+			let contractorUser = await User.findOne({ email: c.email });
+			if (!contractorUser) {
+				await User.create({
+					email: c.email,
+					password: contractorPassword,
+					full_name: c.name,
+					role: 'contractor',
+					phone: c.phone,
+					department_id: dept._id,
+					availability: 'available',
+					contractor_company: c.company,
+				});
+				seededContractors += 1;
+			}
+		}
+	}
+	console.log(`Contractors ensured (2 per department, total newly added: ${seededContractors})`);
+
 	await mongoose.disconnect();
 	console.log('Seed complete');
 }

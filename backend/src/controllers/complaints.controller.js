@@ -112,6 +112,34 @@ function complaintToJson(c, extra) {
     areas: c?.areas ? { name: c.areas.name } : null,
     profiles: c?.profiles ? { full_name: c.profiles.full_name } : null,
     assigned_officer: c?.assigned_to ? { full_name: c.assigned_to.full_name, email: c.assigned_to.email } : null,
+    assigned_contractor_id: toId(c?.assigned_contractor_id),
+    assigned_contractor: c?.assigned_contractor_id && typeof c.assigned_contractor_id === 'object' && c.assigned_contractor_id.full_name
+      ? {
+          id: toId(c.assigned_contractor_id),
+          full_name: c.assigned_contractor_id.full_name,
+          email: c.assigned_contractor_id.email,
+          phone: c.assigned_contractor_id.phone ?? null,
+          company: c.assigned_contractor_id.contractor_company ?? null,
+        }
+      : null,
+    contractor_deadline: c?.contractor_deadline ?? null,
+    contractor_instructions: c?.contractor_instructions ?? null,
+    contractor_status: c?.contractor_status ?? 'unassigned',
+    contractor_accepted_at: c?.contractor_accepted_at ?? null,
+    labor_count: c?.labor_count ?? null,
+    contractor_remarks: c?.contractor_remarks ?? null,
+    assignment_history: Array.isArray(c?.assignment_history)
+      ? c.assignment_history.map((h) => ({
+          contractor_id: toId(h.contractor_id),
+          contractor_name: h.contractor_id?.full_name ?? null,
+          assigned_by: toId(h.assigned_by),
+          assigned_by_name: h.assigned_by?.full_name ?? null,
+          assigned_at: h.assigned_at,
+          deadline: h.deadline ?? null,
+          instructions: h.instructions ?? null,
+          notes: h.notes ?? null,
+        }))
+      : [],
     upvotes: c?.upvotes ?? 0,
     upvoted_by_user: extra && typeof extra.upvoted_by_user === 'boolean' ? extra.upvoted_by_user : false,
     complaint_images: Array.isArray(c?.complaint_images)
@@ -173,18 +201,25 @@ export async function listComplaints(req, res) {
         return;
       }
       filter = { assigned_to: new mongoose.Types.ObjectId(req.user.id) };
+    } else if (req.user.role === 'contractor') {
+      if (!mongoose.Types.ObjectId.isValid(req.user.id)) {
+        res.status(400).json({ error: 'Invalid user' });
+        return;
+      }
+      filter = { assigned_contractor_id: new mongoose.Types.ObjectId(req.user.id) };
     }
     const sortBy = req.query.sort || 'date';
     let sortOption = { createdAt: -1 };
     if (sortBy === 'priority') sortOption = { priority: 1, createdAt: -1 };
     if (sortBy === 'area') sortOption = { ward_id: 1, area_id: 1, createdAt: -1 };
     const list = await Complaint.find(filter)
-      .populate('department_id', 'name')
+      .populate('department_id', 'name code category')
       .populate('zone_id', 'name')
       .populate('ward_id', 'name')
       .populate('area_id', 'name')
       .populate('user_id', 'full_name phone email')
       .populate('assigned_to', 'full_name email')
+      .populate('assigned_contractor_id', 'full_name email phone contractor_company')
       .sort(sortOption)
       .lean();
 
@@ -249,6 +284,8 @@ export async function getComplaintStats(req, res) {
       }
     } else if (req.user.role === 'officer') {
       filter = { assigned_to: new mongoose.Types.ObjectId(req.user.id) };
+    } else if (req.user.role === 'contractor') {
+      filter = { assigned_contractor_id: new mongoose.Types.ObjectId(req.user.id) };
     }
     const complaints = await Complaint.find(filter).select('status').lean();
     const stats = { total: complaints.length, pending: 0, in_progress: 0, on_hold: 0, resolved: 0, rejected: 0, closed: 0 };
@@ -632,12 +669,15 @@ export async function getComplaintById(req, res) {
     }
 
     const c = await Complaint.findById(id)
-      .populate('department_id', 'name')
+      .populate('department_id', 'name code category')
       .populate('zone_id', 'name')
       .populate('ward_id', 'name')
       .populate('area_id', 'name')
       .populate('user_id', 'full_name phone email')
       .populate('assigned_to', 'full_name email')
+      .populate('assigned_contractor_id', 'full_name email phone contractor_company')
+      .populate('assignment_history.contractor_id', 'full_name email phone contractor_company')
+      .populate('assignment_history.assigned_by', 'full_name email')
       .populate('upvoted_by', '_id')
       .lean();
     if (!c) {
@@ -650,9 +690,18 @@ export async function getComplaintById(req, res) {
     const isOwner = c.user_id && toId(c.user_id) === userId;
     const isAdmin = userRole === 'admin';
     const isAssigned = c.assigned_to && toId(c.assigned_to) === userId;
+    const isAssignedContractor = c.assigned_contractor_id && toId(c.assigned_contractor_id) === userId;
     const compDeptId = c.department_id ? (c.department_id._id ? c.department_id._id.toString() : c.department_id.toString()) : null;
     const userDeptId = req.user?.department_id ? req.user.department_id.toString() : null;
     const isSameDept = Boolean(compDeptId && userDeptId && compDeptId === userDeptId);
+
+    // Contractor access control: contractors can only see work assigned directly to them
+    if (userRole === 'contractor') {
+      if (!isAssignedContractor && !isAdmin) {
+        res.status(403).json({ error: 'You do not have permission to view complaints assigned to another contractor' });
+        return;
+      }
+    }
 
     // Staff access control: Department heads & officers can only access complaints within their department or assigned to them
     if (userRole === 'department_head' || userRole === 'officer') {
@@ -734,18 +783,8 @@ export async function createComplaint(req, res) {
     const createdAt = new Date();
     const sla_due_date = calculateSlaDeadline(createdAt, 'medium');
 
-    let latitude = bodyLat !== undefined ? Number(bodyLat) : NaN;
-    let longitude = bodyLng !== undefined ? Number(bodyLng) : NaN;
-
-    if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
-      // Generate Surat center coordinates with random offset so they plot nicely on the Leaflet map
-      const SURAT_LAT = 21.1702;
-      const SURAT_LNG = 72.8311;
-      const latOffset = (Math.random() - 0.5) * 0.06;
-      const lngOffset = (Math.random() - 0.5) * 0.06;
-      latitude = SURAT_LAT + latOffset;
-      longitude = SURAT_LNG + lngOffset;
-    }
+    let latitude = bodyLat !== undefined && bodyLat !== '' && !Number.isNaN(Number(bodyLat)) ? Number(bodyLat) : null;
+    let longitude = bodyLng !== undefined && bodyLng !== '' && !Number.isNaN(Number(bodyLng)) ? Number(bodyLng) : null;
 
     const complaint = await Complaint.create({
       complaint_number,
@@ -840,10 +879,16 @@ export async function updateComplaint(req, res) {
       cost_labor,
       cost_status,
       completion_remarks,
+      assigned_contractor_id,
+      contractor_deadline,
+      contractor_instructions,
+      contractor_status,
+      contractor_remarks,
+      labor_count,
     } = req.body;
 
     const oldComplaint = await Complaint.findById(req.params.id)
-      .select('status user_id department_id assigned_to complaint_number createdAt priority')
+      .select('status user_id department_id assigned_to assigned_contractor_id contractor_status complaint_number createdAt priority assignment_history')
       .lean();
     if (!oldComplaint) {
       res.status(404).json({ error: 'Complaint not found' });
@@ -857,12 +902,16 @@ export async function updateComplaint(req, res) {
     const isAdmin = userRole === 'admin';
     const isDeptHead = userRole === 'department_head';
     const isAssigned = oldComplaint.assigned_to && oldComplaint.assigned_to.toString() === userId;
+    const isAssignedContractor = oldComplaint.assigned_contractor_id && oldComplaint.assigned_contractor_id.toString() === userId;
     const isSameDept = Boolean(
       req.user.department_id &&
       oldComplaint.department_id &&
       oldComplaint.department_id.toString() === req.user.department_id.toString()
     );
     const isDeptHeadOfThisDept = isDeptHead && isSameDept;
+
+    const toObjectId = (v) => (v && mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : null);
+    const update = {};
 
     if (userRole === 'citizen') {
       if (!isOwner) {
@@ -873,12 +922,65 @@ export async function updateComplaint(req, res) {
       const restrictedFields = [
         'status', 'department_id', 'assigned_to', 'priority',
         'accepted_by_department', 'cost_estimated_amount', 'cost_materials',
-        'cost_labor', 'cost_status', 'completion_remarks'
+        'cost_labor', 'cost_status', 'completion_remarks',
+        'assigned_contractor_id', 'contractor_deadline', 'contractor_instructions',
+        'contractor_status', 'contractor_remarks', 'labor_count'
       ];
       const attemptedRestricted = restrictedFields.some((field) => req.body[field] !== undefined);
       if (attemptedRestricted) {
         res.status(403).json({ error: 'Only municipal officers and administrators can update complaint status and workflow fields' });
         return;
+      }
+    } else if (userRole === 'contractor') {
+      // Contractor must be specifically assigned to this complaint
+      if (!isAssignedContractor) {
+        res.status(403).json({ error: 'You do not have permission to modify complaints assigned to another contractor' });
+        return;
+      }
+
+      // Contractors cannot change department, assignees, or priority
+      if (department_id !== undefined || assigned_to !== undefined || assigned_contractor_id !== undefined || priority !== undefined) {
+        res.status(403).json({ error: 'Contractors cannot alter department, assignment, or priority' });
+        return;
+      }
+
+      // Contractors cannot approve or reject costs
+      if (cost_status === 'approved' || cost_status === 'rejected') {
+        res.status(403).json({ error: 'Contractors cannot approve or reject cost estimates' });
+        return;
+      }
+
+      // Contractors cannot verify their own work or resolve the complaint
+      if (contractor_status === 'verified' || status === 'resolved' || status === 'closed') {
+        res.status(403).json({ error: 'Contractors cannot verify their own work or resolve complaints. Department Head verification required.' });
+        return;
+      }
+
+      // Allowed Contractor Action 1: Accept Assignment
+      if (contractor_status === 'accepted') {
+        update.contractor_status = 'accepted';
+        update.contractor_accepted_at = new Date();
+        update.status = 'in_progress';
+      }
+
+      // Allowed Contractor Action 2: Submit Cost Estimate (Head reviews -> Admin approves)
+      if (cost_estimated_amount !== undefined || cost_materials !== undefined || cost_labor !== undefined) {
+        if (cost_estimated_amount !== undefined) update.cost_estimated_amount = Number(cost_estimated_amount) || null;
+        if (cost_materials !== undefined) update.cost_materials = cost_materials ?? null;
+        if (cost_labor !== undefined) update.cost_labor = cost_labor ?? null;
+        update.cost_status = 'submitted';
+        update.cost_submitted_at = new Date();
+      }
+
+      // Allowed Contractor Action 3: Progress & Ground Work
+      if (labor_count !== undefined) update.labor_count = Number(labor_count) || null;
+      if (contractor_remarks !== undefined) update.contractor_remarks = contractor_remarks ?? null;
+
+      // Allowed Contractor Action 4: Submit Completed Work
+      if (contractor_status === 'completed') {
+        update.contractor_status = 'completed';
+        if (completion_remarks !== undefined) update.completion_remarks = completion_remarks ?? null;
+        update.completed_at = new Date();
       }
     } else {
       // Staff authorization: must be admin, department head of THIS complaint's department, or assigned officer/staff
@@ -910,6 +1012,9 @@ export async function updateComplaint(req, res) {
             return;
           }
         }
+        update.cost_status = cost_status;
+        if (cost_status === 'submitted') update.cost_submitted_at = new Date();
+        if (cost_status === 'approved') update.cost_approved_by = new mongoose.Types.ObjectId(req.user.id);
       }
 
       // 3. Officer assignment: Admin or Department Head of this department only
@@ -917,85 +1022,158 @@ export async function updateComplaint(req, res) {
         res.status(403).json({ error: 'Only department heads or administrators can assign officers to complaints' });
         return;
       }
+      if (assigned_to !== undefined) update.assigned_to = toObjectId(assigned_to);
 
-      // 4. Priority updates: Admin or Department Head of this department only
+      // 4. Contractor Assignment: Admin or Department Head of this department only
+      if (assigned_contractor_id !== undefined) {
+        if (!isAdmin && !isDeptHeadOfThisDept) {
+          res.status(403).json({ error: 'Only department heads or administrators can assign contractors to complaints' });
+          return;
+        }
+
+        if (assigned_contractor_id) {
+          const { User } = await import('../models/User.js');
+          const contractorUser = await User.findById(assigned_contractor_id).lean();
+          if (!contractorUser || contractorUser.role !== 'contractor') {
+            res.status(400).json({ error: 'Selected user is not a valid contractor' });
+            return;
+          }
+          if (
+            contractorUser.department_id &&
+            oldComplaint.department_id &&
+            contractorUser.department_id.toString() !== oldComplaint.department_id.toString() &&
+            !isAdmin
+          ) {
+            res.status(400).json({ error: 'Contractor does not belong to this department' });
+            return;
+          }
+
+          update.assigned_contractor_id = contractorUser._id;
+          update.contractor_status = 'assigned';
+          if (contractor_deadline) update.contractor_deadline = new Date(contractor_deadline);
+          if (contractor_instructions !== undefined) update.contractor_instructions = contractor_instructions;
+
+          // Record assignment history entry
+          const historyEntry = {
+            contractor_id: contractorUser._id,
+            assigned_by: new mongoose.Types.ObjectId(userId),
+            assigned_at: new Date(),
+            deadline: contractor_deadline ? new Date(contractor_deadline) : null,
+            instructions: contractor_instructions || null,
+            notes: `Assigned by ${req.user.full_name || 'Department Head'}`,
+          };
+          update.$push = { assignment_history: historyEntry };
+        } else {
+          // Unassign contractor
+          update.assigned_contractor_id = null;
+          update.contractor_status = 'unassigned';
+        }
+      }
+
+      // 5. Work Verification: Admin or Department Head of this department
+      if (contractor_status !== undefined) {
+        if (contractor_status === 'verified') {
+          if (!isAdmin && !isDeptHeadOfThisDept) {
+            res.status(403).json({ error: 'Only department heads or administrators can verify contractor work' });
+            return;
+          }
+          update.contractor_status = 'verified';
+          update.status = 'resolved';
+          update.resolved_at = new Date();
+          update.completed_at = new Date();
+        } else if (contractor_status === 'in_progress' || contractor_status === 'rejected_by_head') {
+          // Correction requested by head
+          update.contractor_status = 'in_progress';
+          update.status = 'in_progress';
+          if (contractor_remarks !== undefined) update.contractor_remarks = contractor_remarks;
+        }
+      }
+
+      // 6. Priority updates: Admin or Department Head of this department only
       if (priority !== undefined && !isAdmin && !isDeptHeadOfThisDept) {
         res.status(403).json({ error: 'Only department heads or administrators can alter complaint priority' });
         return;
       }
+      if (priority !== undefined) {
+        update.priority = priority;
+        if (priority !== oldComplaint.priority) {
+          const baseDate = oldComplaint.createdAt || oldComplaint.created_at || new Date();
+          update.sla_due_date = calculateSlaDeadline(baseDate, priority);
+          update.sla_breached = new Date(update.sla_due_date) <= new Date();
+        }
+      }
 
-      // 5. Valid status values
-      if (status !== undefined) {
+      // 7. General Status updates (if not handled via verification)
+      if (status !== undefined && update.status === undefined) {
         const allowedStatuses = ['pending', 'in_progress', 'on_hold', 'resolved', 'rejected', 'closed'];
         if (!allowedStatuses.includes(status)) {
           res.status(400).json({ error: `Invalid status. Allowed values: ${allowedStatuses.join(', ')}` });
           return;
         }
+        update.status = status;
+        if (status === 'resolved') {
+          update.resolved_at = new Date();
+          update.completed_at = new Date();
+        }
       }
+
+      if (department_id !== undefined) update.department_id = toObjectId(department_id);
+      if (accepted_by_department !== undefined) {
+        update.accepted_by_department = accepted_by_department === true || accepted_by_department === 'true';
+        update.accepted_at = new Date();
+      }
+      if (cost_estimated_amount !== undefined) update.cost_estimated_amount = Number(cost_estimated_amount) || null;
+      if (cost_materials !== undefined) update.cost_materials = cost_materials ?? null;
+      if (cost_labor !== undefined) update.cost_labor = cost_labor ?? null;
+      if (completion_remarks !== undefined) update.completion_remarks = completion_remarks ?? null;
+      if (contractor_remarks !== undefined && update.contractor_remarks === undefined) update.contractor_remarks = contractor_remarks ?? null;
+      if (labor_count !== undefined && update.labor_count === undefined) update.labor_count = Number(labor_count) || null;
     }
 
-    const toObjectId = (v) => (v && mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : null);
-    const update = {};
-    if (status !== undefined) update.status = status;
-    if (department_id !== undefined) update.department_id = toObjectId(department_id);
-    if (assigned_to !== undefined) update.assigned_to = toObjectId(assigned_to);
-    
-    if (priority !== undefined) {
-      update.priority = priority;
-      if (priority !== oldComplaint.priority) {
-        const baseDate = oldComplaint.createdAt || oldComplaint.created_at || new Date();
-        update.sla_due_date = calculateSlaDeadline(baseDate, priority);
-        // Recalculate breached flag if deadline shifted
-        update.sla_breached = new Date(update.sla_due_date) <= new Date();
-      }
-    }
-    if (status === 'resolved') {
-      update.resolved_at = new Date();
-      update.completed_at = new Date();
-    }
-    if (accepted_by_department !== undefined) {
-      update.accepted_by_department = accepted_by_department === true || accepted_by_department === 'true';
-      update.accepted_at = new Date();
-    }
-    if (cost_estimated_amount !== undefined) update.cost_estimated_amount = Number(cost_estimated_amount) || null;
-    if (cost_materials !== undefined) update.cost_materials = cost_materials ?? null;
-    if (cost_labor !== undefined) update.cost_labor = cost_labor ?? null;
-    if (cost_status !== undefined) {
-      update.cost_status = cost_status;
-      if (cost_status === 'submitted') update.cost_submitted_at = new Date();
-      if (cost_status === 'approved') update.cost_approved_by = new mongoose.Types.ObjectId(req.user.id);
-    }
-    if (completion_remarks !== undefined) update.completion_remarks = completion_remarks ?? null;
     const c = await Complaint.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true })
-      .populate('department_id', 'name')
+      .populate('department_id', 'name code category')
+      .populate('assigned_contractor_id', 'full_name email phone contractor_company')
+      .populate('assignment_history.contractor_id', 'full_name email phone contractor_company')
+      .populate('assignment_history.assigned_by', 'full_name email')
       .lean();
     if (!c) {
       res.status(404).json({ error: 'Complaint not found' });
       return;
     }
 
-    // Send notifications if status or assignment changed in background
+    // Send notifications if status, officer, or contractor assignment changed in background
     try {
-      if (status && status !== oldComplaint.status) {
+      if (update.status && update.status !== oldComplaint.status) {
         sendNotification({
           recipientId: oldComplaint.user_id?.toString(),
           senderId: req.user.id,
           type: 'status_change',
           title: 'Complaint Status Updated',
-          message: `Your complaint #${oldComplaint.complaint_number} status has been updated to "${status.replace('_', ' ')}".`,
+          message: `Your complaint #${oldComplaint.complaint_number} status has been updated to "${update.status.replace('_', ' ')}".`,
           link: `/complaints/${c._id}`
         }).catch((err) => console.error('[Notification] Status update notify error:', err));
       }
 
-      if (assigned_to && assigned_to.toString() !== oldComplaint.assigned_to?.toString()) {
+      if (update.assigned_to && update.assigned_to.toString() !== oldComplaint.assigned_to?.toString()) {
         sendNotification({
-          recipientId: assigned_to.toString(),
+          recipientId: update.assigned_to.toString(),
           senderId: req.user.id,
           type: 'assignment',
           title: 'New Complaint Assigned',
           message: `Complaint #${oldComplaint.complaint_number} has been assigned to you.`,
           link: `/complaints/${c._id}`
         }).catch((err) => console.error('[Notification] Assignment notify error:', err));
+      }
+
+      if (update.assigned_contractor_id && update.assigned_contractor_id.toString() !== oldComplaint.assigned_contractor_id?.toString()) {
+        sendNotification({
+          recipientId: update.assigned_contractor_id.toString(),
+          senderId: req.user.id,
+          type: 'contractor_assigned',
+          title: 'New Field Job Assigned',
+          message: `You have been assigned to complaint #${oldComplaint.complaint_number}. Instructions: ${update.contractor_instructions || 'Please review in Contractor Portal'}.`,
+          link: `/contractor/jobs`
+        }).catch((err) => console.error('[Notification] Contractor assignment notify error:', err));
       }
     } catch (err) {
       console.error('[Notification] Error triggering notification for updated complaint:', err);

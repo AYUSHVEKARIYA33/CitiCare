@@ -213,18 +213,43 @@ export default function ComplaintDetail() {
               </p>
             </div>
           </div>
-          {complaint.assigned_officer && (<div className="flex items-center gap-2 md:col-span-2">
+          {complaint.assigned_officer && (<div className="flex items-center gap-2">
               <User className="h-4 w-4 text-muted-foreground"/>
               <div>
-                <p className="text-muted-foreground">Assigned To</p>
+                <p className="text-muted-foreground">Assigned Officer</p>
                 <p className="font-medium">{complaint.assigned_officer.full_name}</p>
+              </div>
+            </div>)}
+          {complaint.assigned_contractor && (<div className="flex items-center gap-2">
+              <HardHat className="h-4 w-4 text-primary"/>
+              <div>
+                <p className="text-muted-foreground">Field Contractor</p>
+                <p className="font-medium">{complaint.assigned_contractor.full_name} {complaint.assigned_contractor.company ? `(${complaint.assigned_contractor.company})` : ''}</p>
               </div>
             </div>)}
         </div>
       </div>
 
-      {/* Department Work Panel - officer/department_head when complaint belongs to their department */}
-      {user?.role && (user.role === 'officer' || user.role === 'department_head') && user.department_id && complaint.department_id === user.department_id && (<DepartmentWorkPanel complaint={complaint}/>)}
+      {/* Contractor Action Quick Link for assigned contractor */}
+      {user?.role === 'contractor' && complaint.assigned_contractor_id === user.id && (
+        <div className="rounded-xl border border-primary/30 bg-primary/10 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <span className="font-bold text-sm text-primary flex items-center gap-1.5">
+              <HardHat className="h-4 w-4" />
+              You are the assigned Field Contractor for this complaint
+            </span>
+            <p className="text-xs text-muted-foreground">
+              Accept assignment, submit cost estimates, deploy labor, and report completion in the Contractor Portal.
+            </p>
+          </div>
+          <Button size="sm" asChild>
+            <Link to={`/contractor/jobs?jobId=${complaint.id}`}>Open in Contractor Portal</Link>
+          </Button>
+        </div>
+      )}
+
+      {/* Department Work Panel - officer/department_head when complaint belongs to their department, or admin */}
+      {user?.role && (user.role === 'admin' || ((user.role === 'officer' || user.role === 'department_head') && user.department_id && complaint.department_id === user.department_id)) && (<DepartmentWorkPanel complaint={complaint}/>)}
       {/* Staff Actions Panel - Only visible to admins (assign department, officer, etc.) */}
       {user?.role === 'admin' && (<StaffActionsPanel complaint={complaint}/>)}
 

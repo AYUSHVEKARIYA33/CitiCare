@@ -29,6 +29,8 @@ export function AuthProvider({ children }) {
           zone_id: d.zone_id ?? null,
           ward_id: d.ward_id ?? null,
           address_line: d.address_line ?? null,
+          availability: d.availability ?? 'available',
+          contractor_company: d.contractor_company ?? null,
         });
       })
       .catch(() => {
@@ -55,6 +57,8 @@ export function AuthProvider({ children }) {
         zone_id: data.user.zone_id ?? null,
         ward_id: data.user.ward_id ?? null,
         address_line: data.user.address_line ?? null,
+        availability: data.user.availability ?? 'available',
+        contractor_company: data.user.contractor_company ?? null,
       };
       setUser(userData);
       return { error: null, user: userData };

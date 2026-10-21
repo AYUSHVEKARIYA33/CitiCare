@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
-import { Home, FileText, PlusCircle, Map, BarChart3, Users, User, Settings, Building2, FolderOpen, HardHat, ClipboardList, Shield, } from 'lucide-react';
+import { Home, FileText, PlusCircle, Map, BarChart3, Users, User, Settings, Building2, FolderOpen, HardHat, ClipboardList, Shield, Bell } from 'lucide-react';
 export const navConfig = {
     citizen: [
         { name: 'Dashboard', href: '/dashboard', icon: Home },
@@ -10,6 +10,13 @@ export const navConfig = {
         { name: 'My Complaints', href: '/complaints', icon: FileText },
         { name: 'Nearby', href: '/nearby', icon: Map },
         { name: 'Public Projects', href: '/projects', icon: HardHat },
+    ],
+    contractor: [
+        { name: 'Dashboard', href: '/contractor', icon: HardHat },
+        { name: 'My Jobs', href: '/contractor/jobs', icon: ClipboardList },
+        { name: 'My Work Map', href: '/contractor/map', icon: Map },
+        { name: 'Notifications', href: '/contractor/notifications', icon: Bell },
+        { name: 'Profile', href: '/profile', icon: User },
     ],
     officer: [
         { name: 'Dept Dashboard', href: '/department', icon: Building2 },
@@ -44,6 +51,8 @@ export const navConfig = {
 };
 function getNavItemsForRole(role) {
     switch (role) {
+        case 'contractor':
+            return navConfig.contractor;
         case 'officer':
             return navConfig.officer;
         case 'department_head':
