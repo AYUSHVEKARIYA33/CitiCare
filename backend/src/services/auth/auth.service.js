@@ -12,7 +12,15 @@ if (!JWT_SECRET) {
 }
 
 function issueToken(user) {
-  return jwt.sign({ userId: user._id.toString(), email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  return jwt.sign(
+    {
+      userId: user._id.toString(),
+      email: user.email,
+      tokenVersion: user.token_version ?? 0,
+    },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
 }
 
 function toPublicUser(user) {
@@ -31,31 +39,52 @@ function toPublicUser(user) {
 }
 
 export async function registerUser({ email, password, full_name }) {
-  if (!email || !password || !full_name) {
-    return { error: { status: 400, message: 'Email, password and full_name are required' } };
+  if (
+    typeof email !== 'string' ||
+    typeof password !== 'string' ||
+    typeof full_name !== 'string' ||
+    !email.trim() ||
+    !password ||
+    !full_name.trim()
+  ) {
+    return { error: { status: 400, message: 'Valid email, password, and full_name are required' } };
   }
 
-  const existing = await User.findOne({ email });
+  const normalizedEmail = email.trim().toLowerCase();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(normalizedEmail)) {
+    return { error: { status: 400, message: 'Please provide a valid email address' } };
+  }
+
+  if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) {
+    return { error: { status: 400, message: 'Password must be between 8 and 72 characters' } };
+  }
+
+  const existing = await User.findOne({ email: normalizedEmail });
   if (existing) {
     return { error: { status: 400, message: 'Email already registered' } };
   }
 
-  const user = await User.create({ email, password, full_name, role: 'citizen' });
+  const user = await User.create({
+    email: normalizedEmail,
+    password,
+    full_name: full_name.trim(),
+    role: 'citizen',
+    token_version: 0,
+  });
   const token = issueToken(user);
   return { data: { token, user: toPublicUser(user) } };
 }
 
 export async function loginUser({ email, password }) {
-  if (!email || !password) {
+  if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) {
     return { error: { status: 400, message: 'Email and password are required' } };
   }
 
-  console.log('[auth] Attempting login for email:', email);
-  const user = await User.findOne({ email }).select('+password');
-  console.log('[auth] User found:', !!user);
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = await User.findOne({ email: normalizedEmail }).select('+password');
   
   if (!user) {
-    console.log('[auth] No user found with email:', email);
     return { error: { status: 401, message: 'Invalid email or password' } };
   }
 

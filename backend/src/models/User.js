@@ -17,6 +17,8 @@ const userSchema = new Schema(
 		notification_push: { type: Boolean, default: true },
 		notification_status_updates: { type: Boolean, default: true },
 		notification_comments: { type: Boolean, default: true },
+		token_version: { type: Number, default: 0 },
+		password_changed_at: { type: Date, default: null },
 	},
 	{ timestamps: true }
 );
@@ -24,6 +26,8 @@ const userSchema = new Schema(
 userSchema.pre('save', async function (next) {
 	if (!this.isModified('password')) return next();
 	this.password = await bcrypt.hash(this.password, 12);
+	this.token_version = (this.token_version || 0) + 1;
+	this.password_changed_at = new Date();
 	next();
 });
 

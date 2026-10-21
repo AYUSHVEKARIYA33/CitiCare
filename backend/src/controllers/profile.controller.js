@@ -106,18 +106,30 @@ export async function uploadAvatar(req, res) {
 export async function changePassword(req, res) {
   try {
     const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword) {
+    if (
+      typeof currentPassword !== 'string' ||
+      typeof newPassword !== 'string' ||
+      !currentPassword ||
+      !newPassword
+    ) {
       res.status(400).json({ error: 'Current and new password are required' });
       return;
     }
+
+    if (newPassword.length < 8 || Buffer.byteLength(newPassword, 'utf8') > 72) {
+      res.status(400).json({ error: 'New password must be between 8 and 72 characters' });
+      return;
+    }
+
     const user = await User.findById(req.user.id).select('+password');
     if (!user || !(await user.comparePassword(currentPassword))) {
       res.status(401).json({ error: 'Current password is incorrect' });
       return;
     }
+
     user.password = newPassword;
     await user.save();
-    res.json({ ok: true });
+    res.json({ ok: true, message: 'Password updated and previous sessions revoked' });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to change password' });

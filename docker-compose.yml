@@ -2,10 +2,13 @@ version: '3.8'
 
 services:
   mongo:
-    image: mongo:5.0
+    image: mongo:6.0
     container_name: citicare-mongo
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER:-citicare_admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-citicare_secret_2026}
     volumes:
       - mongo-data:/data/db
     restart: unless-stopped

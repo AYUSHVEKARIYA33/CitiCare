@@ -34,17 +34,38 @@ app.use(
 );
 app.disable('x-powered-by');
 
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  'https://citi-care.vercel.app',
+  ...(process.env.NODE_ENV !== 'production'
+    ? ['http://localhost:8080', 'http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:8080', 'http://127.0.0.1:5173']
+    : []),
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: true,
+    origin: (origin, callback) => {
+      // Allow non-browser requests or allowed origins
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Blocked by CORS policy'));
+      }
+    },
     credentials: true,
   })
 );
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-// Apply general rate limiting across API endpoints
+// Apply general rate limiting across API endpoints and route aliases
 app.use('/api', apiLimiter);
+const fallbackPrefixes = [
+  '/auth', '/complaints', '/users', '/profile', '/documents',
+  '/projects', '/locations', '/settings', '/departments',
+  '/analytics', '/ai', '/announcements', '/notifications'
+];
+fallbackPrefixes.forEach((prefix) => app.use(prefix, apiLimiter));
 
 const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
 app.use(

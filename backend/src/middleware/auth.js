@@ -16,11 +16,22 @@ export async function authMiddleware(req, res, next) {
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId).select('_id email full_name role department_id zone_id');
+    const user = await User.findById(decoded.userId).select('_id email full_name role department_id zone_id token_version');
     if (!user) {
       res.status(401).json({ error: 'User not found' });
       return;
     }
+
+    // Invalidate session if token_version in JWT doesn't match the user's current token_version (e.g. after password change)
+    if (
+      decoded.tokenVersion !== undefined &&
+      user.token_version !== undefined &&
+      decoded.tokenVersion !== user.token_version
+    ) {
+      res.status(401).json({ error: 'Session invalidated. Please log in again.' });
+      return;
+    }
+
     req.user = {
       id: user._id.toString(),
       email: user.email,

@@ -1,3 +1,4 @@
+import fs from 'fs';
 import mongoose from 'mongoose';
 import { Complaint } from '../models/Complaint.js';
 import { ComplaintImage } from '../models/ComplaintImage.js';
@@ -16,6 +17,70 @@ function getPublicBaseUrl(req) {
 
 function toId(obj) {
   return obj?._id?.toString() ?? null;
+}
+
+/**
+ * Sanitized public serializer for community feeds (nearby, ward view, unrelated citizens).
+ * Omits submitter PII (phone, email, full name), internal cost breakdowns, and internal remarks.
+ */
+function complaintToCommunityJson(c, extra) {
+  const createdAt = c?.createdAt ?? c?.created_at;
+  const updatedAt = c?.updatedAt ?? c?.updated_at;
+  return {
+    id: c?._id?.toString?.() ?? '',
+    complaint_number: c?.complaint_number ?? '',
+    user_id: null,
+    title: c?.title ?? '',
+    description: c?.description ?? '',
+    category: c?.category ?? '',
+    status: c?.status ?? 'pending',
+    priority: c?.priority ?? 'medium',
+    department_id: toId(c?.department_id),
+    assigned_to: null,
+    zone_id: toId(c?.zone_id),
+    ward_id: toId(c?.ward_id),
+    area_id: toId(c?.area_id),
+    address: c?.address ? 'Nearby Citizen Report' : null,
+    latitude: c?.latitude ?? null,
+    longitude: c?.longitude ?? null,
+    resolved_at: c?.resolved_at ?? null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+    departments: c?.departments ? { name: c.departments.name } : null,
+    zones: c?.zones ? { name: c.zones.name } : null,
+    wards: c?.wards ? { name: c.wards.name } : null,
+    areas: c?.areas ? { name: c.areas.name } : null,
+    profiles: null,
+    assigned_officer: null,
+    upvotes: c?.upvotes ?? 0,
+    upvoted_by_user: extra && typeof extra.upvoted_by_user === 'boolean' ? extra.upvoted_by_user : false,
+    complaint_images: Array.isArray(c?.complaint_images)
+      ? c.complaint_images.map((img) => ({
+          id: img?._id?.toString?.() ?? '',
+          complaint_id: img?.complaint_id?.toString?.() ?? null,
+          url: img?.url ?? '',
+          caption: img?.caption ?? null,
+          type: img?.type ?? 'general',
+        }))
+      : [],
+    accepted_by_department: null,
+    accepted_at: null,
+    cost_estimated_amount: null,
+    cost_materials: null,
+    cost_labor: null,
+    cost_status: null,
+    cost_submitted_at: null,
+    cost_approved_by: null,
+    completion_remarks: null,
+    completed_at: c?.completed_at ?? null,
+    feedback_rating: c?.feedback_rating ?? null,
+    feedback_comment: null,
+    feedback_submitted_at: null,
+    sla_due_date: null,
+    sla_breached: false,
+    sla_escalated: false,
+    ...extra,
+  };
 }
 
 function complaintToJson(c, extra) {
@@ -123,33 +188,42 @@ export async function listComplaints(req, res) {
       .sort(sortOption)
       .lean();
 
-    const withImages = await Promise.all(
-      list.map(async (c) => {
-        const images = await ComplaintImage.find({ complaint_id: c._id }).lean();
-        const urls = images.map((i) => ({
-          id: i._id?.toString?.() ?? '',
-          complaint_id: i.complaint_id?.toString?.() ?? null,
-          url: i.url ?? '',
-          caption: i.caption ?? null,
-          type: i.type ?? 'general',
-        }));
-        const upvotedByUser = Array.isArray(c?.upvoted_by)
-          ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id)
-          : false;
-        return complaintToJson(
-          {
-            ...c,
-            complaint_images: urls,
-            departments: c.department_id,
-            zones: c.zone_id,
-            wards: c.ward_id,
-            areas: c.area_id,
-            profiles: c.user_id,
-          },
-          { upvoted_by_user: upvotedByUser }
-        );
-      })
-    );
+    const complaintIds = list.map((c) => c._id);
+    const allImages = complaintIds.length
+      ? await ComplaintImage.find({ complaint_id: { $in: complaintIds } }).lean()
+      : [];
+    const imagesByComplaint = new Map();
+    for (const img of allImages) {
+      const cid = img.complaint_id.toString();
+      if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
+      imagesByComplaint.get(cid).push({
+        id: img._id?.toString?.() ?? '',
+        complaint_id: cid,
+        url: img.url ?? '',
+        caption: img.caption ?? null,
+        type: img.type ?? 'general',
+      });
+    }
+
+    const withImages = list.map((c) => {
+      const cid = c._id.toString();
+      const urls = imagesByComplaint.get(cid) || [];
+      const upvotedByUser = Array.isArray(c?.upvoted_by)
+        ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id)
+        : false;
+      return complaintToJson(
+        {
+          ...c,
+          complaint_images: urls,
+          departments: c.department_id,
+          zones: c.zone_id,
+          wards: c.ward_id,
+          areas: c.area_id,
+          profiles: c.user_id,
+        },
+        { upvoted_by_user: upvotedByUser }
+      );
+    });
     res.json(withImages);
   } catch (e) {
     console.error('[GET /complaints]', e?.message ?? e);
@@ -232,14 +306,25 @@ export async function listNearbyComplaints(req, res) {
   try {
     const lat = parseFloat(req.query.lat);
     const lng = parseFloat(req.query.lng);
-    const radius = parseInt(req.query.radius || '5000', 10);
+    const rawRadius = parseInt(req.query.radius || '5000', 10);
     if (Number.isNaN(lat) || Number.isNaN(lng)) {
       res.status(400).json({ error: 'lat and lng query parameters are required' });
       return;
     }
 
+    // Cap radius between 100m and 50,000m (50km) to prevent unbounded geo searches
+    const radius = Math.min(Math.max(Number.isFinite(rawRadius) ? rawRadius : 5000, 100), 50000);
+
     const toRadians = (deg) => (deg * Math.PI) / 180;
     const earthRadius = 6371000;
+    const latDelta = (radius / earthRadius) * (180 / Math.PI);
+    const lngDelta = (radius / (earthRadius * Math.cos(toRadians(lat)))) * (180 / Math.PI);
+
+    const minLat = lat - latDelta;
+    const maxLat = lat + latDelta;
+    const minLng = lng - lngDelta;
+    const maxLng = lng + lngDelta;
+
     const distanceMeters = (lat1, lon1, lat2, lon2) => {
       const dLat = toRadians(lat2 - lat1);
       const dLon = toRadians(lon2 - lon1);
@@ -248,41 +333,63 @@ export async function listNearbyComplaints(req, res) {
       return earthRadius * c;
     };
 
-    const all = await Complaint.find()
+    // Filter by bounding-box directly in MongoDB with a hard limit
+    const candidates = await Complaint.find({
+      latitude: { $gte: minLat, $lte: maxLat },
+      longitude: { $gte: minLng, $lte: maxLng },
+    })
       .populate('department_id', 'name')
       .populate('zone_id', 'name')
       .populate('ward_id', 'name')
       .populate('area_id', 'name')
-      .populate('user_id', 'full_name phone email')
-      .populate('assigned_to', 'full_name email')
       .populate('upvoted_by', '_id')
+      .limit(60)
       .lean();
 
-    const nearby = all.filter((c) => {
-      if (c.latitude == null || c.longitude == null) return false;
-      const d = distanceMeters(lat, lng, Number(c.latitude), Number(c.longitude));
-      return d <= radius;
-    });
-
-    const withImages = await Promise.all(
-      nearby.map(async (c) => {
-        const images = await ComplaintImage.find({ complaint_id: c._id }).lean();
-        const urls = images.map((i) => ({ id: i._id.toString(), complaint_id: i.complaint_id?.toString?.() ?? null, url: i.url, caption: i.caption, type: i.type ?? 'general' }));
-        const upvotedByUser = Array.isArray(c?.upvoted_by) ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id) : false;
-        return complaintToJson(
-          {
-            ...c,
-            complaint_images: urls,
-            departments: c.department_id,
-            zones: c.zone_id,
-            wards: c.ward_id,
-            areas: c.area_id,
-            profiles: c.user_id,
-          },
-          { upvoted_by_user: upvotedByUser }
-        );
+    const nearby = candidates
+      .filter((c) => {
+        if (c.latitude == null || c.longitude == null) return false;
+        const d = distanceMeters(lat, lng, Number(c.latitude), Number(c.longitude));
+        return d <= radius;
       })
-    );
+      .slice(0, 50);
+
+    // Single batch query for images
+    const complaintIds = nearby.map((c) => c._id);
+    const allImages = complaintIds.length
+      ? await ComplaintImage.find({ complaint_id: { $in: complaintIds } }).lean()
+      : [];
+    const imagesByComplaint = new Map();
+    for (const img of allImages) {
+      const cid = img.complaint_id.toString();
+      if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
+      imagesByComplaint.get(cid).push({
+        id: img._id.toString(),
+        complaint_id: cid,
+        url: img.url,
+        caption: img.caption,
+        type: img.type ?? 'general',
+      });
+    }
+
+    const withImages = nearby.map((c) => {
+      const cid = c._id.toString();
+      const urls = imagesByComplaint.get(cid) || [];
+      const upvotedByUser = Array.isArray(c?.upvoted_by)
+        ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user?.id)
+        : false;
+      return complaintToCommunityJson(
+        {
+          ...c,
+          complaint_images: urls,
+          departments: c.department_id,
+          zones: c.zone_id,
+          wards: c.ward_id,
+          areas: c.area_id,
+        },
+        { upvoted_by_user: upvotedByUser }
+      );
+    });
 
     res.json(withImages);
   } catch (e) {
@@ -308,31 +415,46 @@ export async function listWardNearbyComplaints(req, res) {
       .populate('zone_id', 'name')
       .populate('ward_id', 'name')
       .populate('area_id', 'name')
-      .populate('user_id', 'full_name phone email')
-      .populate('assigned_to', 'full_name email')
       .populate('upvoted_by', '_id')
       .sort({ upvotes: -1, createdAt: -1 })
+      .limit(50)
       .lean();
 
-    const withImages = await Promise.all(
-      list.map(async (c) => {
-        const images = await ComplaintImage.find({ complaint_id: c._id }).lean();
-        const urls = images.map((i) => ({ id: i._id.toString(), complaint_id: i.complaint_id?.toString?.() ?? null, url: i.url, caption: i.caption, type: i.type ?? 'general' }));
-        const upvotedByUser = Array.isArray(c?.upvoted_by) ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id) : false;
-        return complaintToJson(
-          {
-            ...c,
-            complaint_images: urls,
-            departments: c.department_id,
-            zones: c.zone_id,
-            wards: c.ward_id,
-            areas: c.area_id,
-            profiles: c.user_id,
-          },
-          { upvoted_by_user: upvotedByUser }
-        );
-      })
-    );
+    const complaintIds = list.map((c) => c._id);
+    const allImages = complaintIds.length
+      ? await ComplaintImage.find({ complaint_id: { $in: complaintIds } }).lean()
+      : [];
+    const imagesByComplaint = new Map();
+    for (const img of allImages) {
+      const cid = img.complaint_id.toString();
+      if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
+      imagesByComplaint.get(cid).push({
+        id: img._id.toString(),
+        complaint_id: cid,
+        url: img.url,
+        caption: img.caption,
+        type: img.type ?? 'general',
+      });
+    }
+
+    const withImages = list.map((c) => {
+      const cid = c._id.toString();
+      const urls = imagesByComplaint.get(cid) || [];
+      const upvotedByUser = Array.isArray(c?.upvoted_by)
+        ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user?.id)
+        : false;
+      return complaintToCommunityJson(
+        {
+          ...c,
+          complaint_images: urls,
+          departments: c.department_id,
+          zones: c.zone_id,
+          wards: c.ward_id,
+          areas: c.area_id,
+        },
+        { upvoted_by_user: upvotedByUser }
+      );
+    });
 
     res.json(withImages);
   } catch (e) {
@@ -354,31 +476,46 @@ export async function listComplaintsByWard(req, res) {
       .populate('zone_id', 'name')
       .populate('ward_id', 'name')
       .populate('area_id', 'name')
-      .populate('user_id', 'full_name phone email')
-      .populate('assigned_to', 'full_name email')
       .populate('upvoted_by', '_id')
       .sort({ upvotes: -1, createdAt: -1 })
+      .limit(50)
       .lean();
 
-    const withImages = await Promise.all(
-      list.map(async (c) => {
-        const images = await ComplaintImage.find({ complaint_id: c._id }).lean();
-        const urls = images.map((i) => ({ id: i._id.toString(), complaint_id: i.complaint_id?.toString?.() ?? null, url: i.url, caption: i.caption, type: i.type ?? 'general' }));
-        const upvotedByUser = Array.isArray(c?.upvoted_by) ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id) : false;
-        return complaintToJson(
-          {
-            ...c,
-            complaint_images: urls,
-            departments: c.department_id,
-            zones: c.zone_id,
-            wards: c.ward_id,
-            areas: c.area_id,
-            profiles: c.user_id,
-          },
-          { upvoted_by_user: upvotedByUser }
-        );
-      })
-    );
+    const complaintIds = list.map((c) => c._id);
+    const allImages = complaintIds.length
+      ? await ComplaintImage.find({ complaint_id: { $in: complaintIds } }).lean()
+      : [];
+    const imagesByComplaint = new Map();
+    for (const img of allImages) {
+      const cid = img.complaint_id.toString();
+      if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
+      imagesByComplaint.get(cid).push({
+        id: img._id.toString(),
+        complaint_id: cid,
+        url: img.url,
+        caption: img.caption,
+        type: img.type ?? 'general',
+      });
+    }
+
+    const withImages = list.map((c) => {
+      const cid = c._id.toString();
+      const urls = imagesByComplaint.get(cid) || [];
+      const upvotedByUser = Array.isArray(c?.upvoted_by)
+        ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user?.id)
+        : false;
+      return complaintToCommunityJson(
+        {
+          ...c,
+          complaint_images: urls,
+          departments: c.department_id,
+          zones: c.zone_id,
+          wards: c.ward_id,
+          areas: c.area_id,
+        },
+        { upvoted_by_user: upvotedByUser }
+      );
+    });
 
     res.json(withImages);
   } catch (e) {
@@ -421,10 +558,54 @@ export async function listOfficersMeta(req, res) {
 
 export async function listComplaintComments(req, res) {
   try {
-    const comments = await ComplaintComment.find({ complaint_id: req.params.id })
+    const complaintId = req.params.id;
+    if (!complaintId || !mongoose.Types.ObjectId.isValid(complaintId)) {
+      res.status(400).json({ error: 'Invalid complaint id' });
+      return;
+    }
+
+    const complaint = await Complaint.findById(complaintId).select('user_id department_id assigned_to zone_id');
+    if (!complaint) {
+      res.status(404).json({ error: 'Complaint not found' });
+      return;
+    }
+
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    const isAdmin = userRole === 'admin';
+    const isOwner = complaint.user_id && complaint.user_id.toString() === userId;
+    const isAssigned = complaint.assigned_to && complaint.assigned_to.toString() === userId;
+    const isDeptStaff = Boolean(
+      (userRole === 'department_head' || userRole === 'officer') &&
+      req.user?.department_id &&
+      complaint.department_id &&
+      req.user.department_id.toString() === complaint.department_id.toString()
+    );
+    const isStaff = isAdmin || isDeptStaff || isAssigned;
+
+    if (userRole === 'citizen') {
+      const userZone = req.user.zone_id ? req.user.zone_id.toString() : null;
+      const compZone = complaint.zone_id ? complaint.zone_id.toString() : null;
+      if (!isOwner && (!userZone || userZone !== compZone)) {
+        res.status(403).json({ error: 'You do not have permission to view comments for this complaint' });
+        return;
+      }
+    } else if (!isStaff) {
+      res.status(403).json({ error: 'You do not have permission to view comments for this complaint' });
+      return;
+    }
+
+    // Never return internal staff notes to citizen users
+    const commentQuery = { complaint_id: complaint._id };
+    if (!isStaff) {
+      commentQuery.is_internal = false;
+    }
+
+    const comments = await ComplaintComment.find(commentQuery)
       .populate('user_id', 'full_name')
       .sort({ createdAt: 1 })
       .lean();
+
     res.json(
       comments.map((c) => ({
         id: c._id.toString(),
@@ -445,36 +626,84 @@ export async function listComplaintComments(req, res) {
 export async function getComplaintById(req, res) {
   try {
     const id = req.params.id;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ error: 'Invalid complaint id' });
+      return;
+    }
+
     const c = await Complaint.findById(id)
       .populate('department_id', 'name')
       .populate('zone_id', 'name')
       .populate('ward_id', 'name')
       .populate('area_id', 'name')
       .populate('user_id', 'full_name phone email')
+      .populate('assigned_to', 'full_name email')
       .populate('upvoted_by', '_id')
       .lean();
     if (!c) {
       res.status(404).json({ error: 'Complaint not found' });
       return;
     }
-    if (req.user.role === 'citizen') {
-      const ownerId = toId(c.user_id);
-      const userZone = req.user.zone_id;
-      const compZone = c.zone_id ? (c.zone_id._id ? c.zone_id._id.toString() : c.zone_id.toString()) : null;
-      if (ownerId !== req.user.id && (!userZone || userZone !== compZone)) {
-        res.status(403).json({ error: 'Forbidden' });
+
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    const isOwner = c.user_id && toId(c.user_id) === userId;
+    const isAdmin = userRole === 'admin';
+    const isAssigned = c.assigned_to && toId(c.assigned_to) === userId;
+    const compDeptId = c.department_id ? (c.department_id._id ? c.department_id._id.toString() : c.department_id.toString()) : null;
+    const userDeptId = req.user?.department_id ? req.user.department_id.toString() : null;
+    const isSameDept = Boolean(compDeptId && userDeptId && compDeptId === userDeptId);
+
+    // Staff access control: Department heads & officers can only access complaints within their department or assigned to them
+    if (userRole === 'department_head' || userRole === 'officer') {
+      if (!isSameDept && !isAssigned && !isAdmin) {
+        res.status(403).json({ error: 'You do not have permission to view complaints from other departments' });
         return;
       }
     }
+
+    // Citizen access control:
+    let isCommunityView = false;
+    if (userRole === 'citizen') {
+      const userZone = req.user?.zone_id ? req.user.zone_id.toString() : null;
+      const compZone = c.zone_id ? (c.zone_id._id ? c.zone_id._id.toString() : c.zone_id.toString()) : null;
+      if (!isOwner) {
+        if (!userZone || userZone !== compZone) {
+          res.status(403).json({ error: 'Forbidden' });
+          return;
+        }
+        // Citizen viewing someone else's complaint in their zone receives sanitized community response
+        isCommunityView = true;
+      }
+    }
+
     const images = await ComplaintImage.find({ complaint_id: id }).lean();
-    const urls = images.map((i) => ({ id: i._id.toString(), complaint_id: i.complaint_id?.toString?.() ?? null, url: i.url, caption: i.caption, type: i.type ?? 'general' }));
-    const upvotedByUser = Array.isArray(c.upvoted_by) ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id) : false;
-    res.json(
-      complaintToJson(
-        { ...c, complaint_images: urls, departments: c.department_id, zones: c.zone_id, wards: c.ward_id, areas: c.area_id, profiles: c.user_id },
-        { upvoted_by_user: upvotedByUser }
-      )
-    );
+    const urls = images.map((i) => ({
+      id: i._id.toString(),
+      complaint_id: i.complaint_id?.toString?.() ?? null,
+      url: i.url,
+      caption: i.caption,
+      type: i.type ?? 'general',
+    }));
+    const upvotedByUser = Array.isArray(c.upvoted_by)
+      ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id)
+      : false;
+
+    const complaintData = {
+      ...c,
+      complaint_images: urls,
+      departments: c.department_id,
+      zones: c.zone_id,
+      wards: c.ward_id,
+      areas: c.area_id,
+      profiles: isCommunityView ? null : c.user_id,
+    };
+
+    if (isCommunityView) {
+      res.json(complaintToCommunityJson(complaintData, { upvoted_by_user: upvotedByUser }));
+    } else {
+      res.json(complaintToJson(complaintData, { upvoted_by_user: upvotedByUser }));
+    }
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to fetch complaint' });
@@ -628,7 +857,12 @@ export async function updateComplaint(req, res) {
     const isAdmin = userRole === 'admin';
     const isDeptHead = userRole === 'department_head';
     const isAssigned = oldComplaint.assigned_to && oldComplaint.assigned_to.toString() === userId;
-    const isSameDept = req.user.department_id && oldComplaint.department_id && oldComplaint.department_id.toString() === req.user.department_id;
+    const isSameDept = Boolean(
+      req.user.department_id &&
+      oldComplaint.department_id &&
+      oldComplaint.department_id.toString() === req.user.department_id.toString()
+    );
+    const isDeptHeadOfThisDept = isDeptHead && isSameDept;
 
     if (userRole === 'citizen') {
       if (!isOwner) {
@@ -646,9 +880,58 @@ export async function updateComplaint(req, res) {
         res.status(403).json({ error: 'Only municipal officers and administrators can update complaint status and workflow fields' });
         return;
       }
-    } else if (!isAdmin && !isDeptHead && !isAssigned && !isSameDept) {
-      res.status(403).json({ error: 'You do not have permission to update this complaint' });
-      return;
+    } else {
+      // Staff authorization: must be admin, department head of THIS complaint's department, or assigned officer/staff
+      if (!isAdmin && !isDeptHeadOfThisDept && !isAssigned && !isSameDept) {
+        res.status(403).json({ error: 'You do not have permission to update this complaint' });
+        return;
+      }
+
+      // 1. Cross-department reassignment: Admin only
+      if (department_id !== undefined && !isAdmin) {
+        const targetDept = department_id ? department_id.toString() : null;
+        const currentDept = oldComplaint.department_id ? oldComplaint.department_id.toString() : null;
+        if (targetDept !== currentDept) {
+          res.status(403).json({ error: 'Only administrators can reassign complaints across departments' });
+          return;
+        }
+      }
+
+      // 2. Budget Approval / Rejection: Admin only
+      if (cost_status !== undefined) {
+        if ((cost_status === 'approved' || cost_status === 'rejected') && !isAdmin) {
+          res.status(403).json({ error: 'Only administrators can approve or reject complaint cost estimates' });
+          return;
+        }
+        if (cost_status === 'submitted') {
+          // Only assigned officer, department head of this department, or admin can submit costs
+          if (!isAdmin && !isDeptHeadOfThisDept && !isAssigned) {
+            res.status(403).json({ error: 'Only the assigned officer or department head can submit cost estimates' });
+            return;
+          }
+        }
+      }
+
+      // 3. Officer assignment: Admin or Department Head of this department only
+      if (assigned_to !== undefined && !isAdmin && !isDeptHeadOfThisDept) {
+        res.status(403).json({ error: 'Only department heads or administrators can assign officers to complaints' });
+        return;
+      }
+
+      // 4. Priority updates: Admin or Department Head of this department only
+      if (priority !== undefined && !isAdmin && !isDeptHeadOfThisDept) {
+        res.status(403).json({ error: 'Only department heads or administrators can alter complaint priority' });
+        return;
+      }
+
+      // 5. Valid status values
+      if (status !== undefined) {
+        const allowedStatuses = ['pending', 'in_progress', 'on_hold', 'resolved', 'rejected', 'closed'];
+        if (!allowedStatuses.includes(status)) {
+          res.status(400).json({ error: `Invalid status. Allowed values: ${allowedStatuses.join(', ')}` });
+          return;
+        }
+      }
     }
 
     const toObjectId = (v) => (v && mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : null);
@@ -683,7 +966,7 @@ export async function updateComplaint(req, res) {
       if (cost_status === 'approved') update.cost_approved_by = new mongoose.Types.ObjectId(req.user.id);
     }
     if (completion_remarks !== undefined) update.completion_remarks = completion_remarks ?? null;
-    const c = await Complaint.findByIdAndUpdate(req.params.id, update, { new: true })
+    const c = await Complaint.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true })
       .populate('department_id', 'name')
       .lean();
     if (!c) {
@@ -740,23 +1023,33 @@ export async function uploadComplaintImages(req, res) {
   try {
     const complaintId = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(complaintId)) {
+      if (req.files) {
+        for (const file of req.files) {
+          try { fs.unlinkSync(file.path); } catch {}
+        }
+      }
       res.status(400).json({ error: 'Invalid complaint id' });
       return;
     }
+
     const type = req.body.type || 'general';
     if (!['before', 'after', 'general'].includes(type)) {
+      if (req.files) {
+        for (const file of req.files) {
+          try { fs.unlinkSync(file.path); } catch {}
+        }
+      }
       res.status(400).json({ error: 'type must be before, after, or general' });
       return;
     }
+
     const files = req.files;
     if (!files?.length) {
       res.status(400).json({ error: 'No images uploaded' });
       return;
     }
-    const publicBaseUrl = getPublicBaseUrl(req);
-    const urls = files.map((f) => `${publicBaseUrl}/uploads/${f.filename}`);
-    const complaintObjectId = new mongoose.Types.ObjectId(complaintId);
-    await ComplaintImage.insertMany(urls.map((url) => ({ complaint_id: complaintObjectId, url, type })));
+
+    // Fetch complaint and verify access BEFORE persisting records to database
     const c = await Complaint.findById(complaintId)
       .populate('department_id', 'name')
       .populate('zone_id', 'name')
@@ -764,10 +1057,53 @@ export async function uploadComplaintImages(req, res) {
       .populate('area_id', 'name')
       .populate('user_id', 'full_name phone email')
       .lean();
+
     if (!c) {
+      for (const file of files) {
+        try { fs.unlinkSync(file.path); } catch {}
+      }
       res.status(404).json({ error: 'Complaint not found' });
       return;
     }
+
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    const isAdmin = userRole === 'admin';
+    const isOwner = c.user_id && toId(c.user_id) === userId;
+    const isAssigned = c.assigned_to && toId(c.assigned_to) === userId;
+    const compDeptId = c.department_id ? (c.department_id._id ? c.department_id._id.toString() : c.department_id.toString()) : null;
+    const userDeptId = req.user?.department_id ? req.user.department_id.toString() : null;
+    const isDeptStaff = Boolean(
+      (userRole === 'department_head' || userRole === 'officer') &&
+      compDeptId &&
+      userDeptId &&
+      compDeptId === userDeptId
+    );
+    const isStaff = isAdmin || isDeptStaff || isAssigned;
+
+    // Disallow unauthorized users
+    if (!isStaff && !isOwner) {
+      for (const file of files) {
+        try { fs.unlinkSync(file.path); } catch {}
+      }
+      res.status(403).json({ error: 'You do not have permission to attach images to this complaint' });
+      return;
+    }
+
+    // Only staff can upload before/after work evidence photos
+    if ((type === 'before' || type === 'after') && !isStaff) {
+      for (const file of files) {
+        try { fs.unlinkSync(file.path); } catch {}
+      }
+      res.status(403).json({ error: 'Only municipal officers and administrators can upload work evidence (before/after photos)' });
+      return;
+    }
+
+    const publicBaseUrl = getPublicBaseUrl(req);
+    const urls = files.map((f) => `${publicBaseUrl}/uploads/${f.filename}`);
+    const complaintObjectId = new mongoose.Types.ObjectId(complaintId);
+    await ComplaintImage.insertMany(urls.map((url) => ({ complaint_id: complaintObjectId, url, type })));
+
     const images = await ComplaintImage.find({ complaint_id: complaintId }).lean();
     res.json(
       complaintToJson({
@@ -922,45 +1258,88 @@ export async function submitComplaintFeedback(req, res) {
 
 export async function addComplaintComment(req, res) {
   try {
-    const { content } = req.body;
-    if (!content) {
+    const complaintId = req.params.id;
+    if (!complaintId || !mongoose.Types.ObjectId.isValid(complaintId)) {
+      res.status(400).json({ error: 'Invalid complaint id' });
+      return;
+    }
+
+    const { content, is_internal } = req.body;
+    if (!content || typeof content !== 'string' || !content.trim()) {
       res.status(400).json({ error: 'Content is required' });
       return;
     }
+    const trimmedContent = content.trim();
+    if (trimmedContent.length > 2000) {
+      res.status(400).json({ error: 'Comment must be 2000 characters or less' });
+      return;
+    }
+
+    const complaint = await Complaint.findById(complaintId).select('user_id department_id assigned_to zone_id complaint_number');
+    if (!complaint) {
+      res.status(404).json({ error: 'Complaint not found' });
+      return;
+    }
+
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    const isAdmin = userRole === 'admin';
+    const isOwner = complaint.user_id && complaint.user_id.toString() === userId;
+    const isAssigned = complaint.assigned_to && complaint.assigned_to.toString() === userId;
+    const compDeptId = complaint.department_id ? complaint.department_id.toString() : null;
+    const userDeptId = req.user?.department_id ? req.user.department_id.toString() : null;
+    const isDeptStaff = Boolean(
+      (userRole === 'department_head' || userRole === 'officer') &&
+      compDeptId &&
+      userDeptId &&
+      compDeptId === userDeptId
+    );
+    const isStaff = isAdmin || isDeptStaff || isAssigned;
+
+    // Citizens can only comment on their own complaint
+    if (userRole === 'citizen' && !isOwner) {
+      res.status(403).json({ error: 'You do not have permission to comment on this complaint' });
+      return;
+    }
+    if (!isAdmin && !isStaff && !isOwner) {
+      res.status(403).json({ error: 'You do not have permission to comment on this complaint' });
+      return;
+    }
+
+    // Only staff can author internal staff notes; citizens cannot
+    const canSetInternal = isStaff && (is_internal === true || is_internal === 'true');
+
     const comment = await ComplaintComment.create({
-      complaint_id: req.params.id,
+      complaint_id: complaint._id,
       user_id: new mongoose.Types.ObjectId(req.user.id),
-      content,
-      is_internal: false,
+      content: trimmedContent,
+      is_internal: canSetInternal,
     });
 
     // Send comments notifications to participants in background
     try {
-      const c = await Complaint.findById(req.params.id).select('user_id assigned_to complaint_number').lean();
-      if (c) {
-        const messageText = `${req.user.full_name} commented: "${content.substring(0, 40)}${content.length > 40 ? '...' : ''}"`;
-        
-        if (c.user_id && c.user_id.toString() !== req.user.id) {
-          sendNotification({
-            recipientId: c.user_id.toString(),
-            senderId: req.user.id,
-            type: 'new_comment',
-            title: `New Comment on #${c.complaint_number}`,
-            message: messageText,
-            link: `/complaints/${req.params.id}`
-          }).catch((err) => console.error('[Notification] Comment notify error:', err));
-        }
-        
-        if (c.assigned_to && c.assigned_to.toString() !== req.user.id) {
-          sendNotification({
-            recipientId: c.assigned_to.toString(),
-            senderId: req.user.id,
-            type: 'new_comment',
-            title: `New Comment on #${c.complaint_number}`,
-            message: messageText,
-            link: `/complaints/${req.params.id}`
-          }).catch((err) => console.error('[Notification] Comment notify error:', err));
-        }
+      const messageText = `${req.user.full_name} commented: "${trimmedContent.substring(0, 40)}${trimmedContent.length > 40 ? '...' : ''}"`;
+      
+      if (complaint.user_id && complaint.user_id.toString() !== req.user.id && !canSetInternal) {
+        sendNotification({
+          recipientId: complaint.user_id.toString(),
+          senderId: req.user.id,
+          type: 'new_comment',
+          title: `New Comment on #${complaint.complaint_number}`,
+          message: messageText,
+          link: `/complaints/${complaintId}`
+        }).catch((err) => console.error('[Notification] Comment notify error:', err));
+      }
+      
+      if (complaint.assigned_to && complaint.assigned_to.toString() !== req.user.id) {
+        sendNotification({
+          recipientId: complaint.assigned_to.toString(),
+          senderId: req.user.id,
+          type: 'new_comment',
+          title: `New Comment on #${complaint.complaint_number}`,
+          message: messageText,
+          link: `/complaints/${complaintId}`
+        }).catch((err) => console.error('[Notification] Comment notify error:', err));
       }
     } catch (err) {
       console.error('[Notification] Error creating comment notification:', err);

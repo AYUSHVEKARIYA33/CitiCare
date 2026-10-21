@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
-import { upload } from '../middleware/upload.js';
+import { upload, authorizeComplaintUpload } from '../middleware/upload.js';
 import {
   addComplaintComment,
   createComplaint,
@@ -37,7 +37,7 @@ router.get('/:id/comments', listComplaintComments);
 router.get('/:id', getComplaintById);
 router.post('/', upload.array('images', 10), createComplaint);
 router.patch('/:id', updateComplaint);
-router.post('/:id/images', upload.array('images', 10), uploadComplaintImages);
+router.post('/:id/images', authorizeComplaintUpload, upload.array('images', 10), uploadComplaintImages);
 router.delete('/:id', deleteComplaint);
 router.post('/:id/upvote', upvoteComplaint);
 router.post('/:id/feedback', submitComplaintFeedback);

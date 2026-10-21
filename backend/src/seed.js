@@ -12,25 +12,33 @@ import { Announcement } from './models/Announcement.js';
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/citicare';
 
 async function seed() {
+	if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SEED_RESET !== 'true') {
+		console.error('[seed] Refusing to run destructive seed script in production without ALLOW_SEED_RESET=true.');
+		process.exit(1);
+	}
+
 	await mongoose.connect(MONGODB_URI);
 	console.log('Connected to MongoDB');
 
-	// Clear old complaints and announcements
-	const deletedComplaints = await Complaint.deleteMany({});
-	console.log(`Deleted ${deletedComplaints.deletedCount} old complaints`);
-	
-	const deletedAnnouncements = await Announcement.deleteMany({});
-	console.log(`Deleted ${deletedAnnouncements.deletedCount} old announcements`);
+	// Clear old complaints and announcements ONLY when explicitly requested via ALLOW_SEED_RESET=true
+	if (process.env.ALLOW_SEED_RESET === 'true') {
+		const deletedComplaints = await Complaint.deleteMany({});
+		console.log(`Reset requested: Deleted ${deletedComplaints.deletedCount} old complaints`);
+		
+		const deletedAnnouncements = await Announcement.deleteMany({});
+		console.log(`Reset requested: Deleted ${deletedAnnouncements.deletedCount} old announcements`);
+	}
 
 	const existingAdmin = await User.findOne({ email: 'admin@citicare.local' });
 	if (!existingAdmin) {
+		const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || 'admin123';
 		await User.create({
 			email: 'admin@citicare.local',
-			password: 'admin123',
+			password: adminPassword,
 			full_name: 'Admin User',
 			role: 'admin',
 		});
-		console.log('Created admin user: admin@citicare.local / admin123');
+		console.log('Created initial admin account: admin@citicare.local');
 	} else {
 		console.log('Admin user already exists');
 	}
@@ -174,10 +182,6 @@ async function seed() {
 	const allDepartments = await Department.find({});
 	let linkedHeads = 0;
 
-	// Delete old department head users first to ensure fresh creation
-	await User.deleteMany({ role: 'department_head' });
-	console.log('Deleted old department head users');
-
 	for (const dept of allDepartments) {
 		const preset = defaultHeads[dept.code];
 		const fallbackKey = (dept.code || dept.name || 'department')
@@ -190,13 +194,15 @@ async function seed() {
 
 		let officer = await User.findOne({ email: officerEmail });
 		if (!officer) {
+			const officerPassword = process.env.INITIAL_OFFICER_PASSWORD || 'officer123';
 			officer = await User.create({
 				email: officerEmail,
-				password: 'officer123',
+				password: officerPassword,
 				full_name: officerName,
 				role: 'department_head',
 				department_id: dept._id,
 			});
+			console.log(`Created department head for ${dept.name}: ${officerEmail}`);
 		}
 
 		await Department.findByIdAndUpdate(dept._id, { in_charge_officer_id: officer._id });

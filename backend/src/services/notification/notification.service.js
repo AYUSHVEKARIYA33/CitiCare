@@ -127,16 +127,30 @@ export async function sendNotification({ recipientId, senderId = null, type, tit
           const mailFrom = process.env.SMTP_FROM || 'CitiCare <noreply@citicare.local>';
           const frontendUrl = process.env.CLIENT_URL || 'https://citi-care.vercel.app';
           
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+          const safeTitle = escapeHtml(title);
+          const safeMessage = escapeHtml(message);
+          const safeLink = link && typeof link === 'string' && link.startsWith('/') ? encodeURI(link) : null;
+
           const htmlContent = `
             <div style="font-family: system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
               <div style="border-bottom: 2px solid #3b82f6; padding-bottom: 12px; margin-bottom: 20px;">
                 <h2 style="color: #1e3a8a; margin: 0; font-size: 20px;">CitiCare Notification</h2>
               </div>
-              <p style="font-size: 15px; color: #1f2937; font-weight: 600; margin: 0 0 10px 0;">${title}</p>
-              <p style="font-size: 14px; color: #4b5563; line-height: 1.6; margin: 0 0 24px 0;">${message}</p>
-              ${link ? `
+              <p style="font-size: 15px; color: #1f2937; font-weight: 600; margin: 0 0 10px 0;">${safeTitle}</p>
+              <p style="font-size: 14px; color: #4b5563; line-height: 1.6; margin: 0 0 24px 0;">${safeMessage}</p>
+              ${safeLink ? `
                 <div style="margin-top: 24px; margin-bottom: 10px;">
-                  <a href="${frontendUrl}${link}" 
+                  <a href="${frontendUrl}${safeLink}" 
                      style="background-color: #2563eb; color: #ffffff; padding: 12px 20px; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 500; display: inline-block;">
                     View in CitiCare
                   </a>
