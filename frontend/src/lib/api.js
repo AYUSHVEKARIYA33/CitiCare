@@ -10,6 +10,15 @@ export const api = axios.create({
   timeout: 60000,
 });
 
+// Automatically remove default Content-Type header when sending FormData
+// so browser sets multipart/form-data with exact boundary parameter
+api.interceptors.request.use((config) => {
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
+  return config;
+});
+
 // Log in dev if API URL is wrong (Vite only injects env at build/start - restart dev server after changing .env)
 if (import.meta.env.DEV && !import.meta.env.VITE_API_URL) {
   console.warn('[api] VITE_API_URL not set in .env; using fallback:', API_URL);

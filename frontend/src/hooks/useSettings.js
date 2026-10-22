@@ -36,9 +36,7 @@ export function useUploadAvatar() {
       const formData = new FormData();
       formData.append('avatar', file);
 
-      const { data } = await api.post('/profile/avatar', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const { data } = await api.post('/profile/avatar', formData);
       return data.avatar_url;
     },
     onSuccess: () => {

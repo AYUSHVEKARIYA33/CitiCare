@@ -2,12 +2,20 @@ import multer from 'multer';
 import path from 'path';
 import { randomBytes } from 'crypto';
 
+import fs from 'fs';
+
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 const MIME_EXTENSION_MAP = {
   'image/jpeg': '.jpg',
   'image/jpg': '.jpg',
+  'image/pjpeg': '.jpg',
+  'image/jfif': '.jpg',
   'image/png': '.png',
+  'image/x-png': '.png',
   'image/webp': '.webp',
 };
 
@@ -16,9 +24,10 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (_req, file, cb) => {
-    // Derive extension strictly from validated mimetype to prevent executable extensions
-    const ext = MIME_EXTENSION_MAP[file.mimetype.toLowerCase()] || '.jpg';
-    const name = `${randomBytes(12).toString('hex')}-${Date.now()}${ext}`;
+    const mime = file.mimetype?.toLowerCase();
+    const ext = MIME_EXTENSION_MAP[mime] || path.extname(file.originalname || '').toLowerCase() || '.jpg';
+    const safeExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext) ? ext : '.jpg';
+    const name = `${randomBytes(12).toString('hex')}-${Date.now()}${safeExt}`;
     cb(null, name);
   },
 });
@@ -27,8 +36,12 @@ export const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (_req, file, cb) => {
-    const isAllowedMime = Boolean(MIME_EXTENSION_MAP[file.mimetype?.toLowerCase()]);
-    if (isAllowedMime) {
+    const mime = file.mimetype?.toLowerCase();
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const isAllowedMime = Boolean(MIME_EXTENSION_MAP[mime]);
+    const isAllowedExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
+
+    if (isAllowedMime || isAllowedExt) {
       cb(null, true);
     } else {
       cb(new Error('Invalid file format. Only JPEG, PNG, and WebP images are allowed.'));

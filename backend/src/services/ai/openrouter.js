@@ -1,5 +1,6 @@
 const OPENROUTER_API_BASE = process.env.OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
+const OPENROUTER_VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'google/gemini-2.0-flash-exp:free';
 const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 8000);
 
 function getOpenRouterApiKey() {
@@ -39,9 +40,9 @@ function normalizeOpenRouterError(response, detail) {
   return `OpenRouter request failed: status_${response.status} - ${detail}`;
 }
 
-async function callOpenRouter(body) {
+async function callOpenRouter(body, timeoutMs = AI_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(`${OPENROUTER_API_BASE.replace(/\/$/, '')}/chat/completions`, {
@@ -83,23 +84,30 @@ export async function createOpenRouterTextCompletion(systemPrompt, userPrompt) {
 
 export async function createOpenRouterVisionCompletion(input) {
   const dataUrl = `data:${input.mimeType};base64,${input.imageBuffer.toString('base64')}`;
-  const content = await callOpenRouter({
-    model: OPENROUTER_MODEL,
-    messages: [
-      {
-        role: 'system',
-        content: input.systemPrompt,
-      },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: `Context JSON: ${JSON.stringify(input.contextPayload)}` },
-          { type: 'image_url', image_url: { url: dataUrl } },
-        ],
-      },
-    ],
-    temperature: 0.2,
-  });
+  const visionModel = OPENROUTER_VISION_MODEL;
 
-  return { content, model: OPENROUTER_MODEL };
+  try {
+    const content = await callOpenRouter({
+      model: visionModel,
+      messages: [
+        {
+          role: 'system',
+          content: input.systemPrompt,
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `Context JSON: ${JSON.stringify(input.contextPayload)}` },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      temperature: 0.2,
+    }, 10000); // 10s timeout for vision
+
+    return { content, model: visionModel };
+  } catch (err) {
+    console.warn('[OpenRouter Vision] Vision request failed, falling back:', err.message);
+    throw err;
+  }
 }

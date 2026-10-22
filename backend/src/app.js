@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 import { apiLimiter } from './middleware/rate-limiter.js';
@@ -68,7 +69,11 @@ const fallbackPrefixes = [
 ];
 fallbackPrefixes.forEach((prefix) => app.use(prefix, apiLimiter));
 
-const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
 app.use(
   '/uploads',
   express.static(uploadDir, {
@@ -118,5 +123,23 @@ if (process.env.DBLESS !== 'true') {
 }
 
 app.get(['/api/health', '/health'], (_req, res) => res.json({ ok: true }));
+
+// Global error handling middleware (handles Multer errors, validation errors, etc.)
+app.use((err, _req, res, _next) => {
+  if (err?.name === 'MulterError') {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      res.status(400).json({ error: 'File size too large. Maximum allowed size is 10MB per image.' });
+      return;
+    }
+    res.status(400).json({ error: err.message || 'File upload error' });
+    return;
+  }
+  if (err?.message?.includes('Invalid file format')) {
+    res.status(400).json({ error: err.message });
+    return;
+  }
+  console.error('[Unhandled Error]', err);
+  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+});
 
 export default app;

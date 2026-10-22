@@ -98,6 +98,24 @@ export default function ContractorJobs() {
     }
   }
 
+  const handleSelectFiles = (filesList, setter) => {
+    const files = Array.from(filesList || []);
+    const valid = [];
+    const maxSize = 10 * 1024 * 1024;
+    for (const f of files) {
+      if (f.size > maxSize) {
+        toast({
+          title: 'Photo too large',
+          description: `"${f.name}" exceeds the 10MB limit (${(f.size / (1024 * 1024)).toFixed(1)}MB). Please choose a smaller photo.`,
+          variant: 'destructive',
+        });
+        continue;
+      }
+      valid.push(f);
+    }
+    setter(valid);
+  };
+
   // Filter complaints
   const filteredJobs = useMemo(() => {
     return complaints.filter((job) => {
@@ -691,8 +709,8 @@ export default function ContractorJobs() {
                   <Input
                     type="file"
                     multiple
-                    accept="image/*"
-                    onChange={(e) => setBeforeFiles(Array.from(e.target.files || []))}
+                    accept="image/jpeg,image/png,image/webp,image/*"
+                    onChange={(e) => handleSelectFiles(e.target.files, setBeforeFiles)}
                     className="h-9 text-xs"
                   />
                   {beforeFiles.length > 0 && (
@@ -740,8 +758,8 @@ export default function ContractorJobs() {
                   <Input
                     type="file"
                     multiple
-                    accept="image/*"
-                    onChange={(e) => setAfterFiles(Array.from(e.target.files || []))}
+                    accept="image/jpeg,image/png,image/webp,image/*"
+                    onChange={(e) => handleSelectFiles(e.target.files, setAfterFiles)}
                     className="h-9 text-xs"
                   />
                   {afterFiles.length > 0 && (

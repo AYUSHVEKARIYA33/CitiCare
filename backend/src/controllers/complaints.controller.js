@@ -56,7 +56,7 @@ function complaintToCommunityJson(c, extra) {
     upvoted_by_user: extra && typeof extra.upvoted_by_user === 'boolean' ? extra.upvoted_by_user : false,
     complaint_images: Array.isArray(c?.complaint_images)
       ? c.complaint_images.map((img) => ({
-          id: img?._id?.toString?.() ?? '',
+          id: img?.id || img?._id?.toString?.() || '',
           complaint_id: img?.complaint_id?.toString?.() ?? null,
           url: img?.url ?? '',
           caption: img?.caption ?? null,
@@ -144,7 +144,7 @@ function complaintToJson(c, extra) {
     upvoted_by_user: extra && typeof extra.upvoted_by_user === 'boolean' ? extra.upvoted_by_user : false,
     complaint_images: Array.isArray(c?.complaint_images)
       ? c.complaint_images.map((img) => ({
-          id: img?._id?.toString?.() ?? '',
+          id: img?.id || img?._id?.toString?.() || '',
           complaint_id: img?.complaint_id?.toString?.() ?? null,
           url: img?.url ?? '',
           caption: img?.caption ?? null,
@@ -1256,7 +1256,9 @@ export async function uploadComplaintImages(req, res) {
     const userId = req.user?.id;
     const isAdmin = userRole === 'admin';
     const isOwner = c.user_id && toId(c.user_id) === userId;
-    const isAssigned = c.assigned_to && toId(c.assigned_to) === userId;
+    const isAssignedOfficer = c.assigned_to && toId(c.assigned_to) === userId;
+    const isAssignedContractor = c.assigned_contractor_id && toId(c.assigned_contractor_id) === userId;
+    const isAssigned = isAssignedOfficer || isAssignedContractor;
     const compDeptId = c.department_id ? (c.department_id._id ? c.department_id._id.toString() : c.department_id.toString()) : null;
     const userDeptId = req.user?.department_id ? req.user.department_id.toString() : null;
     const isDeptStaff = Boolean(
@@ -1276,12 +1278,12 @@ export async function uploadComplaintImages(req, res) {
       return;
     }
 
-    // Only staff can upload before/after work evidence photos
+    // Only staff, assigned contractors, or admins can upload before/after work evidence photos
     if ((type === 'before' || type === 'after') && !isStaff) {
       for (const file of files) {
         try { fs.unlinkSync(file.path); } catch {}
       }
-      res.status(403).json({ error: 'Only municipal officers and administrators can upload work evidence (before/after photos)' });
+      res.status(403).json({ error: 'Only municipal officers, assigned contractors, and administrators can upload work evidence (before/after photos)' });
       return;
     }
 

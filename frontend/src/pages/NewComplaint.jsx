@@ -242,14 +242,35 @@ export default function NewComplaint() {
         });
     }, [latestImage, latestImageKey, title, description, address, isImageSuggestPending, suggestFromImage]);
 
-    // Automatically apply suggestions once AI returns data
+    // Automatically apply suggestions once AI returns data, without overwriting user's typed input
     useEffect(() => {
         if (!imageSuggest.data) return;
-        applyImageSuggestions();
-        toast({
-            title: 'AI Auto-Fill Completed',
-            description: 'Title, description, and category were successfully pre-filled from your photo!',
-        });
+        const data = imageSuggest.data;
+        let appliedAny = false;
+
+        if (data.suggested_title && !title.trim()) {
+            setTitle(data.suggested_title);
+            appliedAny = true;
+        }
+        if (data.suggested_description && !description.trim()) {
+            setDescription(data.suggested_description);
+            appliedAny = true;
+        }
+        if (data.category_hint && !category) {
+            setCategory(data.category_hint);
+            appliedAny = true;
+        }
+        if (data.department_id && !departmentId) {
+            setDepartmentId(data.department_id);
+            appliedAny = true;
+        }
+
+        if (appliedAny) {
+            toast({
+                title: 'AI Auto-Fill Suggestions Ready',
+                description: 'Fields pre-filled from your photo. You can edit or adjust anytime!',
+            });
+        }
     }, [imageSuggest.data]);
 
     const applyImageSuggestions = () => {
@@ -349,10 +370,17 @@ export default function NewComplaint() {
         <div className="rounded-xl border border-border bg-card p-6 shadow-card space-y-5">
           {/* Category Selection */}
           <div className="space-y-2">
-            <Label htmlFor="category">Category *</Label>
-            <Select value={category} onValueChange={handleCategoryChange} required disabled={imageSuggest.isPending}>
+            <Label htmlFor="category" className="flex items-center justify-between">
+              <span>Category *</span>
+              {imageSuggest.isPending && (
+                <span className="text-xs text-primary flex items-center gap-1 font-normal animate-pulse">
+                  <Sparkles className="h-3 w-3" /> AI analyzing photo...
+                </span>
+              )}
+            </Label>
+            <Select value={category} onValueChange={handleCategoryChange} required>
               <SelectTrigger>
-                <SelectValue placeholder={imageSuggest.isPending ? "✨ AI is selecting category..." : "Select complaint category"}/>
+                <SelectValue placeholder="Select complaint category"/>
               </SelectTrigger>
               <SelectContent>
                 {complaintCategories.map((cat) => (<SelectItem key={cat.value} value={cat.value}>
@@ -371,11 +399,9 @@ export default function NewComplaint() {
               <Building2 className="inline h-4 w-4 mr-1"/>
               Department *
             </Label>
-            <Select value={departmentId} onValueChange={setDepartmentId} required disabled={departmentsLoading || !category || filteredDepartments.length === 0 || imageSuggest.isPending}>
+            <Select value={departmentId} onValueChange={setDepartmentId} required disabled={departmentsLoading || !category || filteredDepartments.length === 0}>
               <SelectTrigger id="department">
-                <SelectValue placeholder={imageSuggest.isPending
-            ? '✨ AI is selecting department...'
-            : !category
+                <SelectValue placeholder={!category
                 ? 'Select a category first'
                 : departmentsLoading
                     ? 'Loading departments...'
@@ -395,13 +421,13 @@ export default function NewComplaint() {
           {/* Title */}
           <div className="space-y-2">
             <Label htmlFor="title">Complaint Title *</Label>
-            <Input id="title" placeholder={imageSuggest.isPending ? "✨ AI is analyzing your photo..." : "Brief title describing the issue"} value={title} onChange={(e) => setTitle(e.target.value)} required disabled={imageSuggest.isPending}/>
+            <Input id="title" placeholder="Brief title describing the issue" value={title} onChange={(e) => setTitle(e.target.value)} required />
           </div>
 
           {/* Description */}
           <div className="space-y-2">
             <Label htmlFor="description">Description *</Label>
-            <Textarea id="description" placeholder={imageSuggest.isPending ? "✨ AI is writing description..." : "Provide detailed description of the issue..."} rows={4} value={description} onChange={(e) => setDescription(e.target.value)} required disabled={imageSuggest.isPending}/>
+            <Textarea id="description" placeholder="Provide detailed description of the issue..." rows={4} value={description} onChange={(e) => setDescription(e.target.value)} required />
           </div>
 
           {(title.trim().length > 0 || description.trim().length > 0) && (<Alert className="border-info/40 bg-info/5">

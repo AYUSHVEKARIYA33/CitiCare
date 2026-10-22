@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
+import { connectDB } from './config/db.js';
 import { User } from './models/User.js';
 import { Zone } from './models/Zone.js';
 import { Ward } from './models/Ward.js';
@@ -9,15 +10,13 @@ import { SystemSetting } from './models/SystemSetting.js';
 import { Complaint } from './models/Complaint.js';
 import { Announcement } from './models/Announcement.js';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/citicare';
-
 async function seed() {
 	if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SEED_RESET !== 'true') {
 		console.error('[seed] Refusing to run destructive seed script in production without ALLOW_SEED_RESET=true.');
 		process.exit(1);
 	}
 
-	await mongoose.connect(MONGODB_URI);
+	await connectDB();
 	console.log('Connected to MongoDB');
 
 	// Clear old complaints and announcements ONLY when explicitly requested via ALLOW_SEED_RESET=true

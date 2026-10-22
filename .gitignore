@@ -30,3 +30,7 @@ Thumbs.db
 
 # Misc
 *.local
+uploads/
+backend/uploads/*
+!backend/uploads/.gitkeep
+

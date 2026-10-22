@@ -69,7 +69,6 @@ export function useCreateComplaint() {
       }
 
       const { data: complaint } = await api.post('/complaints', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 60000,
       });
       return normalizeComplaintImages(complaint);
@@ -286,9 +285,7 @@ export function useUploadComplaintImages() {
       const formData = new FormData();
       images.forEach((f) => formData.append('images', f));
       formData.append('type', type);
-      const { data } = await api.post(`/complaints/${complaintId}/images`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const { data } = await api.post(`/complaints/${complaintId}/images`, formData);
       return normalizeComplaintImages(data);
     },
     onSuccess: (data) => {

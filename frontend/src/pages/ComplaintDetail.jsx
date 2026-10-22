@@ -263,7 +263,7 @@ export default function ComplaintDetail() {
             {beforeImages.length > 0 && (<div>
                 <h3 className="text-sm font-medium text-muted-foreground mb-3">Before Work ({beforeImages.length})</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {beforeImages.map((image) => (<button key={image.id} onClick={() => setSelectedImage(image.url)} className="aspect-square rounded-lg overflow-hidden border border-border hover:border-accent transition-colors">
+                  {beforeImages.map((image, idx) => (<button key={image.id || image.url || idx} onClick={() => setSelectedImage(image.url)} className="aspect-square rounded-lg overflow-hidden border border-border hover:border-accent transition-colors">
                       <img src={image.url} alt={image.caption || 'Before work image'} className="w-full h-full object-cover"/>
                     </button>))}
                 </div>
@@ -272,7 +272,7 @@ export default function ComplaintDetail() {
             {afterImages.length > 0 && (<div>
                 <h3 className="text-sm font-medium text-muted-foreground mb-3">After Work ({afterImages.length})</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {afterImages.map((image) => (<button key={image.id} onClick={() => setSelectedImage(image.url)} className="aspect-square rounded-lg overflow-hidden border border-border hover:border-accent transition-colors">
+                  {afterImages.map((image, idx) => (<button key={image.id || image.url || idx} onClick={() => setSelectedImage(image.url)} className="aspect-square rounded-lg overflow-hidden border border-border hover:border-accent transition-colors">
                       <img src={image.url} alt={image.caption || 'After work image'} className="w-full h-full object-cover"/>
                     </button>))}
                 </div>
@@ -281,7 +281,7 @@ export default function ComplaintDetail() {
             {otherImages.length > 0 && (<div>
                 <h3 className="text-sm font-medium text-muted-foreground mb-3">Other Photos ({otherImages.length})</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {otherImages.map((image) => (<button key={image.id} onClick={() => setSelectedImage(image.url)} className="aspect-square rounded-lg overflow-hidden border border-border hover:border-accent transition-colors">
+                  {otherImages.map((image, idx) => (<button key={image.id || image.url || idx} onClick={() => setSelectedImage(image.url)} className="aspect-square rounded-lg overflow-hidden border border-border hover:border-accent transition-colors">
                       <img src={image.url} alt={image.caption || 'Complaint image'} className="w-full h-full object-cover"/>
                     </button>))}
                 </div>
