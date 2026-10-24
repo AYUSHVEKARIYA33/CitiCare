@@ -7,10 +7,8 @@ const GEMINI_TEXT_MODELS = [
 ].filter(Boolean);
 const GEMINI_VISION_MODELS = [
   process.env.GEMINI_MODEL_VISION,
-  'gemini-3.5-flash',
-  'gemini-3.6-flash',
   'gemini-flash-latest',
-].filter(Boolean);
+].filter((model, index, models) => model && models.indexOf(model) === index);
 const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 35000);
 
 function extractGeminiText(payload) {
@@ -27,14 +25,14 @@ function extractGeminiText(payload) {
   return text;
 }
 
-async function callGemini(model, body) {
+async function callGemini(model, body, timeoutMs = AI_TIMEOUT_MS) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not configured');
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const endpoint = `${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -96,8 +94,11 @@ export async function createGeminiTextCompletion(systemPrompt, userPrompt) {
 
 export async function createGeminiVisionCompletion(input) {
   let lastError = null;
+  const deadline = Date.now() + Math.min(input.timeoutMs || AI_TIMEOUT_MS, AI_TIMEOUT_MS);
   for (const model of GEMINI_VISION_MODELS) {
     try {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('provider_timeout');
       const content = await callGemini(model, {
         systemInstruction: {
           parts: [{ text: input.systemPrompt }],
@@ -120,11 +121,12 @@ export async function createGeminiVisionCompletion(input) {
           temperature: 0.2,
           responseMimeType: 'application/json',
         },
-      });
+      }, remaining);
       return { content, model };
     } catch (err) {
-      console.warn(`[Gemini Vision] Model "${model}" failed:`, err.message);
       lastError = err;
+      // Changing models cannot repair credentials, exhausted quota or a timeout.
+      if (/auth_failed|quota_exceeded|abort|timeout/i.test(err.message)) break;
     }
   }
   throw lastError || new Error('All Gemini vision models failed');

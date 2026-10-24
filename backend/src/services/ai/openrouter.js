@@ -2,10 +2,9 @@ const OPENROUTER_API_BASE = process.env.OPENROUTER_API_BASE || 'https://openrout
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
 const OPENROUTER_VISION_MODELS = [
   process.env.OPENROUTER_VISION_MODEL,
+  OPENROUTER_MODEL,
   'openrouter/free',
-  'nvidia/nemotron-3.5-super-vl:free',
-  'dots-studio/dots-3-note-preview:free',
-].filter(Boolean);
+].filter((model, index, models) => model && models.indexOf(model) === index);
 const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 35000);
 
 function getOpenRouterApiKey() {
@@ -90,9 +89,12 @@ export async function createOpenRouterTextCompletion(systemPrompt, userPrompt) {
 export async function createOpenRouterVisionCompletion(input) {
   const dataUrl = `data:${input.mimeType};base64,${input.imageBuffer.toString('base64')}`;
   let lastError = null;
+  const deadline = Date.now() + Math.min(input.timeoutMs || AI_TIMEOUT_MS, AI_TIMEOUT_MS);
 
   for (const visionModel of OPENROUTER_VISION_MODELS) {
     try {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('provider_timeout');
       const content = await callOpenRouter({
         model: visionModel,
         messages: [
@@ -109,14 +111,14 @@ export async function createOpenRouterVisionCompletion(input) {
           },
         ],
         temperature: 0.2,
-      }, AI_TIMEOUT_MS);
+      }, remaining);
 
       if (content && typeof content === 'string') {
         return { content, model: visionModel };
       }
     } catch (err) {
-      console.warn(`[OpenRouter Vision] Vision request with model "${visionModel}" failed:`, err.message);
       lastError = err;
+      if (/auth_failed|quota_exceeded|abort|timeout/i.test(err.message)) break;
     }
   }
 

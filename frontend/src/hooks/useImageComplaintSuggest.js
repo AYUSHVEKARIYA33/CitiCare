@@ -13,7 +13,9 @@ export function useImageComplaintSuggest() {
       const { data } = await api.post('/ai/image-suggest', formData, {
         timeout: 45000,
       });
-      return data;
+      // Associate a response with its actual File so an old in-flight request
+      // cannot fill the form or display suggestions for a newly selected photo.
+      return { ...data, imageFile: input.image };
     },
   });
 }

@@ -9,72 +9,19 @@ function clampConfidence(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-function detectCategoryFromText(value) {
-  const text = (value || '').toLowerCase();
-  if (!text.trim()) return null;
-  if (/\b(pothole|road|street|asphalt|traffic|divider|highway|pavement)\b/.test(text)) return 'roads';
-  if (/\b(water|leak|pipeline|pipe|tap|supply|burst|flooding|hydrant)\b/.test(text)) return 'water';
-  if (/\b(garbage|trash|waste|dump|bin|litter|cleaning)\b/.test(text)) return 'garbage';
-  if (/\b(sewage|drain|drainage|sewer|gutter|overflow)\b/.test(text)) return 'sewage';
-  if (/\b(street light|streetlight|lamp post|lamp|dark|bulb|pole)\b/.test(text)) return 'street_lights';
-  if (/\b(electric|power|voltage|wire|transformer|spark|current)\b/.test(text)) return 'electricity';
-  if (/\b(park|garden|tree|playground|bench|branch)\b/.test(text)) return 'parks';
-  return null;
-}
-
 function fallbackImageSuggestion(input, redactions, reason) {
-  const textBlob = [
-    input.filename || '',
-    input.title || '',
-    input.description || '',
-    input.address || '',
-  ].join(' ');
-
-  let likelyCategory = detectCategoryFromText(textBlob);
-  if (!likelyCategory) {
-    const withCat = (input.departments || []).find((d) => d.category && d.category !== 'other');
-    likelyCategory = withCat?.category || 'water';
-  }
-
-  const fallbackDepartment = bestDepartmentMatch(null, input.departments, likelyCategory);
-
-  const titlesByCategory = {
-    water: 'Water pipeline leakage and supply disruption',
-    roads: 'Road damage and pothole repair required',
-    sewage: 'Sewage overflow and drainage blockage',
-    garbage: 'Accumulated garbage and waste clearance needed',
-    street_lights: 'Street light malfunction / non-functional light',
-    electricity: 'Electrical line or power infrastructure issue',
-    parks: 'Public park or garden maintenance required',
-    other: 'Civic infrastructure issue reported from photo',
-  };
-
-  const descriptionsByCategory = {
-    water: 'Severe water leakage or pipeline damage observed from the photo. Immediate municipal repair is required to prevent water wastage and local flooding.',
-    roads: 'Damaged road surface / pothole detected in uploaded photo. Road maintenance and resurfacing required for public safety.',
-    sewage: 'Drainage or sewer blockage causing overflow. Desilting and pipeline clearance requested.',
-    garbage: 'Uncollected garbage accumulation observed. Municipal sanitation team requested to clear the area.',
-    street_lights: 'Damaged or inactive street light pole reported. Electrical inspection and fixture replacement needed.',
-    electricity: 'Electrical wiring or infrastructure safety concern detected. Power department inspection requested.',
-    parks: 'Park maintenance or tree branch hazard observed. Gardening and maintenance team requested.',
-    other: 'Issue detected from uploaded image. Please add exact location details, problem duration, and impact for faster resolution.',
-  };
-
+  // No image was analysed successfully: never invent a finding from department order,
+  // filenames, an address, or text auto-filled for an earlier photo.
   return {
-    suggested_title: input.title?.trim() || titlesByCategory[likelyCategory] || 'Civic issue reported from uploaded photo',
-    suggested_description:
-      input.description?.trim() ||
-      descriptionsByCategory[likelyCategory] ||
-      'Issue detected from uploaded image. Please add exact location details, problem duration, and impact for faster resolution.',
-    category_hint: likelyCategory,
-    department_id: fallbackDepartment?.id ?? null,
-    department_name: fallbackDepartment?.name ?? null,
+    suggested_title: '',
+    suggested_description: '',
+    category_hint: null,
+    department_id: null,
+    department_name: null,
     suggestions: [
-      'Add the nearest landmark and lane/house number if available.',
-      'Mention when the issue started and whether it is worsening.',
-      'Describe safety impact (traffic, water logging, night visibility, etc.).',
+      'Photo analysis is unavailable. Please describe the visible issue and choose its category manually, or retry.',
     ],
-    confidence: 0.55,
+    confidence: 0,
     source: 'fallback',
     fallback_reason: reason,
     model: null,
@@ -89,20 +36,25 @@ function normalizeFallbackReasonFromError(error) {
   if (message.includes('429') || message.includes('resource_exhausted') || message.includes('quota')) return 'quota_exceeded';
   if (message.includes('abort') || message.includes('timeout')) return 'provider_timeout';
   if (message.includes('401') || message.includes('403') || message.includes('api key') || message.includes('auth_failed') || message.includes('permission_denied')) return 'provider_auth_failed';
-  if (message.includes('503') || message.includes('high demand') || message.includes('unavailable')) return 'provider_busy';
   if (message.includes('image_model_unavailable') || message.includes('no endpoints found')) return 'provider_model_unavailable';
+  if (message.includes('invalid_image_response')) return 'invalid_provider_response';
+  if (message.includes('503') || message.includes('high demand') || message.includes('unavailable')) return 'provider_busy';
   return 'provider_request_failed';
 }
 
 function bestDepartmentMatch(name, departments = [], categoryHint) {
   if (!departments || !departments.length) return null;
 
+  // Prefer the category actually detected in the photo over an inconsistent name.
+  const byCategory = departments.find((dept) => categoryHint && dept.category === categoryHint);
+  if (byCategory) return byCategory;
   const normalizedName = (name || '').trim().toLowerCase();
   if (normalizedName) {
-    const exact = departments.find((dept) => dept.name.trim().toLowerCase() === normalizedName);
+    const eligible = departments.filter((dept) => !categoryHint || !dept.category || dept.category === categoryHint);
+    const exact = eligible.find((dept) => dept.name.trim().toLowerCase() === normalizedName);
     if (exact) return exact;
 
-    const contains = departments.find((dept) => dept.name.trim().toLowerCase().includes(normalizedName) || normalizedName.includes(dept.name.trim().toLowerCase()));
+    const contains = eligible.find((dept) => dept.name.trim().toLowerCase().includes(normalizedName) || normalizedName.includes(dept.name.trim().toLowerCase()));
     if (contains) return contains;
   }
 
@@ -135,7 +87,7 @@ function bestDepartmentMatch(name, departments = [], categoryHint) {
     }
   }
 
-  return departments[0] ?? null;
+  return null;
 }
 
 function parseModelJson(raw) {
@@ -146,20 +98,16 @@ function parseModelJson(raw) {
   const jsonStart = cleaned.indexOf('{');
   const jsonEnd = cleaned.lastIndexOf('}');
   const jsonText = jsonStart >= 0 && jsonEnd >= jsonStart ? cleaned.slice(jsonStart, jsonEnd + 1) : cleaned;
-  let parsed = {};
+  let parsed;
   try {
     parsed = JSON.parse(jsonText);
   } catch {
-    const titleMatch = raw.match(/"suggested_title"\s*:\s*"([^"]+)"/i);
-    const descMatch = raw.match(/"suggested_description"\s*:\s*"([^"]+)"/i);
-    const catMatch = raw.match(/"category_hint"\s*:\s*"([^"]+)"/i);
-    const deptMatch = raw.match(/"department_name"\s*:\s*"([^"]+)"/i);
-    parsed = {
-      suggested_title: titleMatch?.[1] || null,
-      suggested_description: descMatch?.[1] || null,
-      category_hint: catMatch?.[1] || null,
-      department_name: deptMatch?.[1] || null,
-    };
+    throw new Error('invalid_image_response');
+  }
+  if (!parsed || typeof parsed.suggested_title !== 'string' || !parsed.suggested_title.trim()
+      || typeof parsed.suggested_description !== 'string' || !parsed.suggested_description.trim()
+      || typeof parsed.category_hint !== 'string') {
+    throw new Error('invalid_image_response');
   }
 
   const category = typeof parsed.category_hint === 'string' ? parsed.category_hint.trim().toLowerCase() : '';
@@ -197,7 +145,7 @@ function parseModelJson(raw) {
     suggestions: Array.isArray(parsed.suggestions)
       ? parsed.suggestions.filter((item) => typeof item === 'string').slice(0, 3)
       : [],
-    confidence: clampConfidence(typeof parsed.confidence === 'number' ? parsed.confidence : 0.85),
+    confidence: clampConfidence(Number.isFinite(parsed.confidence) ? parsed.confidence : 0.5),
   };
 }
 
@@ -228,11 +176,16 @@ export async function generateImageSuggestions(input) {
   const systemPrompt = [
     'You assist citizens filing municipal complaints from images.',
     'Carefully inspect the image to detect the civic problem (e.g. water pipe burst, leaking water, road pothole, overflowing garbage, broken street light, fallen wire, sewage overflow, damaged park).',
+    'The image is the primary evidence. Existing title, description and address may refer to a previous photo; do not repeat them when they conflict with the image.',
+    'Classify leaking or burst clean-water pipes as water, not roads just because a road is visible.',
     'Return strict JSON with keys: suggested_title, suggested_description, category_hint, department_name, suggestions, confidence.',
     'category_hint must be exactly one of: roads, water, electricity, garbage, sewage, street_lights, parks, other.',
     'department_name must be chosen from the available_departments list that best handles this problem.',
     'suggested_title should be a concise, clear title of the issue (e.g. "Burst water main spraying water").',
     'suggested_description should be 1-2 detailed sentences describing what is visible in the photo.',
+    'Describe the visible defect, affected object and visible impact. Do not invent buried infrastructure, duration, location, severity or damage that cannot be seen.',
+    'If no civic problem can be identified, use category other and explain the uncertainty. Never default to the first department.',
+    'Suggestions are for citizens: request useful reporting details, not instructions to repair pipes or operate municipal equipment.',
     'suggestions should be short and actionable (max 3).',
     'confidence is a number between 0.0 and 1.0.',
     'Never include personal data in outputs.',
@@ -257,13 +210,18 @@ export async function generateImageSuggestions(input) {
 
   let lastError = null;
 
-  for (const { name: providerName, fn: createVisionCompletion } of providersToTry) {
+  // Both providers must finish inside the photo request's 45-second client timeout.
+  const deadline = Date.now() + 35000;
+  for (const [index, { name: providerName, fn: createVisionCompletion }] of providersToTry.entries()) {
     try {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('provider_timeout');
       const completion = await createVisionCompletion({
         systemPrompt,
         contextPayload,
         imageBuffer: input.imageBuffer,
         mimeType: input.mimeType,
+        timeoutMs: Math.max(1, Math.floor(remaining / (providersToTry.length - index))),
       });
 
       const content = completion?.content;
@@ -286,8 +244,9 @@ export async function generateImageSuggestions(input) {
           redactions,
         };
       }
+      throw new Error('invalid_image_response');
     } catch (err) {
-      console.warn(`[AI Vision] Provider "${providerName}" failed:`, err.message);
+      console.warn(`[AI Vision] Provider "${providerName}" failed:`, normalizeFallbackReasonFromError(err));
       lastError = err;
     }
   }
