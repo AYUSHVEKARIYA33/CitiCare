@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { MapPin, Loader2, CheckCircle, Building2, WandSparkles, Sparkles, Navigation } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { complaintCategories } from '@/data/categories';
+import { clearPhotoSuggestions, mergePhotoSuggestions } from '@/lib/photo-suggestions';
 
 export default function NewComplaint() {
     const [title, setTitle] = useState('');
@@ -44,8 +45,12 @@ export default function NewComplaint() {
     const imageSuggest = useImageComplaintSuggest();
     const { isPending: isImageSuggestPending, mutate: suggestFromImage } = imageSuggest;
     const suggestedImageKeyRef = useRef('');
+    const autoFilledPhotoRef = useRef({});
+    const complaintFieldsRef = useRef({});
+    complaintFieldsRef.current = { title, description, category, departmentId };
     
     const latestImage = images.length > 0 ? images[images.length - 1] : null;
+    const photoSuggestion = imageSuggest.data?.imageFile === latestImage ? imageSuggest.data : null;
     const latestImageKey = latestImage ? `${latestImage.name}-${latestImage.size}-${latestImage.lastModified}` : '';
 
     // Filter departments by selected category (with fallback to all departments if no strict match)
@@ -65,27 +70,30 @@ export default function NewComplaint() {
     }, [departments, category, departmentId]);
 
     const selectedCategoryLabel = useMemo(() => {
-        if (!imageSuggest.data?.category_hint)
+        if (!photoSuggestion?.category_hint)
             return null;
-        const matched = complaintCategories.find((item) => item.value === imageSuggest.data?.category_hint);
-        return matched?.label ?? imageSuggest.data?.category_hint;
-    }, [imageSuggest.data?.category_hint]);
+        const matched = complaintCategories.find((item) => item.value === photoSuggestion.category_hint);
+        return matched?.label ?? photoSuggestion.category_hint;
+    }, [photoSuggestion?.category_hint]);
 
     const fallbackReasonLabel = useMemo(() => {
-        const reason = imageSuggest.data?.fallback_reason;
+        const reason = photoSuggestion?.fallback_reason;
         if (!reason)
             return null;
         const labels = {
-            quota_exceeded: 'AI quota exceeded for this key/project. Please check Gemini quota or billing, then try again.',
-            provider_auth_failed: 'AI provider authentication failed. Please verify API key configuration.',
+            quota_exceeded: 'Photo analysis is temporarily unavailable. Please retry later or describe the issue manually.',
+            provider_auth_failed: 'Photo analysis is unavailable. Please describe the issue manually while the service is restored.',
             provider_timeout: 'AI provider timed out. Please retry in a moment.',
-            missing_api_key: 'AI API key is missing on the backend configuration.',
+            missing_api_key: 'Photo analysis is not available. You can still complete the complaint manually.',
             feature_disabled: 'AI image suggestions are disabled by backend configuration.',
             provider_request_failed: 'AI provider request failed. Please retry shortly.',
             request_failed: 'AI request failed. Please retry shortly.',
+            provider_busy: 'Photo analysis is busy. Please retry in a moment.',
+            provider_model_unavailable: 'Photo analysis is temporarily unavailable. Please retry later.',
+            invalid_provider_response: 'The photo could not be understood reliably. Try a clearer photo or describe the issue manually.',
         };
         return labels[reason] || reason;
-    }, [imageSuggest.data?.fallback_reason]);
+    }, [photoSuggestion?.fallback_reason]);
 
     const imageSuggestErrorMessage = imageSuggest.error?.response?.data?.error ||
         imageSuggest.error?.message ||
@@ -241,65 +249,42 @@ export default function NewComplaint() {
         if (suggestedImageKeyRef.current === latestImageKey || isImageSuggestPending)
             return;
         suggestedImageKeyRef.current = latestImageKey;
+        const clean = clearPhotoSuggestions({ title, description, category, departmentId }, autoFilledPhotoRef.current);
+        setTitle(clean.title);
+        setDescription(clean.description);
+        setCategory(clean.category);
+        setDepartmentId(clean.departmentId);
+        autoFilledPhotoRef.current = {};
         suggestFromImage({
             image: latestImage,
-            title,
-            description,
+            title: clean.title,
+            description: clean.description,
             address,
         });
-    }, [latestImage, latestImageKey, title, description, address, isImageSuggestPending, suggestFromImage]);
+    }, [latestImage, latestImageKey, title, description, category, departmentId, address, isImageSuggestPending, suggestFromImage]);
 
-    // Automatically apply suggestions once AI returns data, updating empty or default fields
+    // Only successful results for this photo can fill empty or previously auto-filled fields.
     useEffect(() => {
-        if (!imageSuggest.data) return;
-        const data = imageSuggest.data;
-        let appliedAny = false;
-
-        // Auto-fill category if provided
-        if (data.category_hint) {
-            setCategory(data.category_hint);
-            appliedAny = true;
-        }
-
-        // Auto-select department
-        if (data.department_id) {
-            setDepartmentId(data.department_id);
-            appliedAny = true;
-        } else if (data.category_hint && departments?.length) {
-            const matchDept = departments.find(d => d.category === data.category_hint);
-            if (matchDept) {
-                setDepartmentId(matchDept.id);
-                appliedAny = true;
-            }
-        }
-
-        // Auto-fill title if user hasn't typed a custom title
-        const isGenericTitle = !title.trim() || title === 'Civic issue reported from uploaded photo';
-        if (data.suggested_title && isGenericTitle) {
-            setTitle(data.suggested_title);
-            appliedAny = true;
-        }
-
-        // Auto-fill description if user hasn't typed a custom description
-        const isGenericDesc = !description.trim() || description.startsWith('Issue detected from uploaded image');
-        if (data.suggested_description && isGenericDesc) {
-            setDescription(data.suggested_description);
-            appliedAny = true;
-        }
-
-        if (appliedAny) {
-            const deptObj = departments?.find(d => d.id === (data.department_id || departmentId));
+        if (photoSuggestion?.source !== 'ai') return;
+        const current = complaintFieldsRef.current;
+        const { values, autoFilled } = mergePhotoSuggestions(current, photoSuggestion, autoFilledPhotoRef.current);
+        autoFilledPhotoRef.current = autoFilled;
+        setTitle(values.title);
+        setDescription(values.description);
+        setCategory(values.category);
+        setDepartmentId(values.departmentId);
+        if (Object.keys(current).some(field => current[field] !== values[field])) {
             toast({
                 title: 'AI Auto-Fill Applied',
-                description: deptObj ? `Assigned to ${deptObj.name} with details pre-filled.` : 'Category, department, and description filled from your photo.',
+                description: 'Photo details filled. Please review before submitting.',
             });
         }
-    }, [imageSuggest.data, departments]);
+    }, [photoSuggestion, toast]);
 
     const applyImageSuggestions = () => {
-        if (!imageSuggest.data)
+        if (photoSuggestion?.source !== 'ai')
             return;
-        const data = imageSuggest.data;
+        const data = photoSuggestion;
         if (data.category_hint) {
             setCategory(data.category_hint);
         }
@@ -315,6 +300,7 @@ export default function NewComplaint() {
         if (data.suggested_description) {
             setDescription(data.suggested_description);
         }
+        autoFilledPhotoRef.current = { title: data.suggested_title, description: data.suggested_description, category: data.category_hint, departmentId: data.department_id };
         toast({
             title: 'AI Suggestions Applied',
             description: 'Updated category, department, title, and description from photo.',
@@ -563,39 +549,39 @@ export default function NewComplaint() {
               <AlertDescription>
                 {imageSuggest.isError ? (<p className="text-xs text-destructive">{imageSuggestErrorMessage}</p>) : null}
 
-                {imageSuggest.data ? (<div className="space-y-3 mt-2">
+                {photoSuggestion ? (<div className="space-y-3 mt-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       {selectedCategoryLabel ? <Badge variant="info">Category: {selectedCategoryLabel}</Badge> : null}
-                      {imageSuggest.data.department_name ? <Badge variant="secondary">Department: {imageSuggest.data.department_name}</Badge> : null}
-                      <Badge variant={imageSuggest.data.source === 'ai' ? 'success' : 'warning'}>
-                        Source: {imageSuggest.data.source === 'ai' ? 'AI Vision' : 'Fallback'}
+                      {photoSuggestion.department_name ? <Badge variant="secondary">Department: {photoSuggestion.department_name}</Badge> : null}
+                      <Badge variant={photoSuggestion.source === 'ai' ? 'success' : 'warning'}>
+                        Source: {photoSuggestion.source === 'ai' ? 'AI Vision' : 'Unavailable'}
                       </Badge>
-                      <Badge variant={imageSuggest.data.source === 'ai' ? 'success' : 'outline'}>
-                        Confidence: {Math.round(imageSuggest.data.confidence * 100)}%
-                      </Badge>
+                      {photoSuggestion.source === 'ai' ? <Badge variant="success">
+                        Confidence: {Math.round(photoSuggestion.confidence * 100)}%
+                      </Badge> : null}
                     </div>
 
-                    {imageSuggest.data.source === 'fallback' && imageSuggest.data.fallback_reason ? (<p className="text-xs text-muted-foreground">
-                        Fallback reason: {fallbackReasonLabel}
+                    {photoSuggestion.source === 'fallback' && photoSuggestion.fallback_reason ? (<p className="text-xs text-muted-foreground">
+                        {fallbackReasonLabel}
                       </p>) : null}
 
-                    {imageSuggest.data.suggestions?.length ? (<ul className="list-disc pl-5 text-sm space-y-1">
-                        {imageSuggest.data.suggestions.map((item, index) => (<li key={`${index}-${item}`}>{item}</li>))}
+                    {photoSuggestion.suggestions?.length ? (<ul className="list-disc pl-5 text-sm space-y-1">
+                        {photoSuggestion.suggestions.map((item, index) => (<li key={`${index}-${item}`}>{item}</li>))}
                       </ul>) : null}
 
-                    <div className="text-sm space-y-1">
+                    {photoSuggestion.source === 'ai' ? <div className="text-sm space-y-1">
                       <p>
-                        <span className="font-medium">Suggested title:</span> {imageSuggest.data.suggested_title}
+                        <span className="font-medium">Suggested title:</span> {photoSuggestion.suggested_title}
                       </p>
                       <p>
-                        <span className="font-medium">Suggested description:</span> {imageSuggest.data.suggested_description}
+                        <span className="font-medium">Suggested description:</span> {photoSuggestion.suggested_description}
                       </p>
-                    </div>
+                    </div> : null}
 
                     <div className="flex items-center gap-2">
-                      <Button type="button" variant="outline" size="sm" onClick={applyImageSuggestions}>
+                      {photoSuggestion.source === 'ai' ? <Button type="button" variant="outline" size="sm" onClick={applyImageSuggestions}>
                         Apply AI Suggestions
-                      </Button>
+                      </Button> : null}
                       <Button type="button" variant="ghost" size="sm" disabled={imageSuggest.isPending} onClick={() => {
                     if (!latestImage)
                         return;
