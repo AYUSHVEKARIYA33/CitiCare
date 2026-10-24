@@ -44,8 +44,6 @@ export const navConfig = {
         { name: 'Departments', href: '/departments', icon: Building2 },
         { name: 'Analytics', href: '/analytics', icon: BarChart3 },
         { name: 'City Map', href: '/map', icon: Map },
-        { name: 'Documents', href: '/documents', icon: FolderOpen },
-        { name: 'Projects', href: '/projects', icon: HardHat },
         { name: 'Settings', href: '/settings', icon: Settings },
     ],
 };
