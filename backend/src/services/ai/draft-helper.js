@@ -31,7 +31,19 @@ function fallbackHints(input) {
 }
 
 function parseModelJson(raw) {
-  const parsed = JSON.parse(raw);
+  const cleaned = (raw || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '');
+  const jsonStart = cleaned.indexOf('{');
+  const jsonEnd = cleaned.lastIndexOf('}');
+  const jsonText = jsonStart >= 0 && jsonEnd >= jsonStart ? cleaned.slice(jsonStart, jsonEnd + 1) : cleaned;
+  let parsed = {};
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    parsed = {};
+  }
 
   const suggestions = Array.isArray(parsed.suggestions)
     ? parsed.suggestions.filter((item) => typeof item === 'string').slice(0, 3)
@@ -56,13 +68,11 @@ export async function generateDraftHelper(input) {
     return fallbackHints(input);
   }
 
-  const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
-  const hasConfiguredProvider =
-    provider === 'openrouter'
-      ? !!process.env.OPENROUTER_API_KEY
-      : !!process.env.GEMINI_API_KEY;
+  const configuredProvider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
+  const hasGeminiKey = !!process.env.GEMINI_API_KEY;
+  const hasOpenRouterKey = !!process.env.OPENROUTER_API_KEY;
 
-  if (!hasConfiguredProvider) {
+  if (!hasGeminiKey && !hasOpenRouterKey) {
     const fallback = fallbackHints(input);
     return {
       ...fallback,
@@ -70,40 +80,49 @@ export async function generateDraftHelper(input) {
     };
   }
 
-  try {
-    const systemPrompt = [
-      'You are an assistant helping citizens draft municipal complaints.',
-      'Return strict JSON with keys: suggestions (string[]), improved_title (string|null), category_hint (string|null).',
-      'Suggestions must be concise and actionable. No markdown.',
-      'Do not include personal data in output.',
-    ].join(' ');
-
-    const userPrompt = JSON.stringify({
-      title: safeTitle.sanitized,
-      description: safeDescription.sanitized,
-      category: input.category || null,
-    });
-
-    const createTextCompletion = provider === 'openrouter'
-      ? createOpenRouterTextCompletion
-      : createGeminiTextCompletion;
-
-    const completion = await createTextCompletion(systemPrompt, userPrompt);
-    const parsed = parseModelJson(completion.content);
-
-    return {
-      suggestions: parsed.suggestions,
-      improved_title: parsed.improved_title,
-      category_hint: parsed.category_hint,
-      source: 'ai',
-      model: completion.model,
-      redactions: safeTitle.redactions + safeDescription.redactions,
-    };
-  } catch {
-    const fallback = fallbackHints(input);
-    return {
-      ...fallback,
-      redactions: safeTitle.redactions + safeDescription.redactions,
-    };
+  const providersToTry = [];
+  if (configuredProvider === 'gemini') {
+    if (hasGeminiKey) providersToTry.push({ name: 'gemini', fn: createGeminiTextCompletion });
+    if (hasOpenRouterKey) providersToTry.push({ name: 'openrouter', fn: createOpenRouterTextCompletion });
+  } else {
+    if (hasOpenRouterKey) providersToTry.push({ name: 'openrouter', fn: createOpenRouterTextCompletion });
+    if (hasGeminiKey) providersToTry.push({ name: 'gemini', fn: createGeminiTextCompletion });
   }
+
+  for (const { name: providerName, fn: createTextCompletion } of providersToTry) {
+    try {
+      const systemPrompt = [
+        'You are an assistant helping citizens draft municipal complaints.',
+        'Return strict JSON with keys: suggestions (string[]), improved_title (string|null), category_hint (string|null).',
+        'Suggestions must be concise and actionable. No markdown.',
+        'Do not include personal data in output.',
+      ].join(' ');
+
+      const userPrompt = JSON.stringify({
+        title: safeTitle.sanitized,
+        description: safeDescription.sanitized,
+        category: input.category || null,
+      });
+
+      const completion = await createTextCompletion(systemPrompt, userPrompt);
+      const parsed = parseModelJson(completion?.content);
+
+      return {
+        suggestions: parsed.suggestions,
+        improved_title: parsed.improved_title,
+        category_hint: parsed.category_hint,
+        source: 'ai',
+        model: completion?.model || providerName,
+        redactions: safeTitle.redactions + safeDescription.redactions,
+      };
+    } catch (err) {
+      console.warn(`[DraftHelper] Provider "${providerName}" failed:`, err.message);
+    }
+  }
+
+  const fallback = fallbackHints(input);
+  return {
+    ...fallback,
+    redactions: safeTitle.redactions + safeDescription.redactions,
+  };
 }

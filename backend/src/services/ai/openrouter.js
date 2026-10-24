@@ -1,7 +1,12 @@
 const OPENROUTER_API_BASE = process.env.OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
-const OPENROUTER_VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'google/gemini-2.0-flash-exp:free';
-const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 8000);
+const OPENROUTER_VISION_MODELS = [
+  process.env.OPENROUTER_VISION_MODEL,
+  'openrouter/free',
+  'nvidia/nemotron-3.5-super-vl:free',
+  'dots-studio/dots-3-note-preview:free',
+].filter(Boolean);
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 35000);
 
 function getOpenRouterApiKey() {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -27,7 +32,7 @@ function extractOpenRouterText(payload) {
 }
 
 function normalizeOpenRouterError(response, detail) {
-  const lowered = detail.toLowerCase();
+  const lowered = (detail || '').toLowerCase();
   if (response.status === 429 || lowered.includes('rate limit') || lowered.includes('quota')) {
     return 'OpenRouter request failed: quota_exceeded';
   }
@@ -84,30 +89,36 @@ export async function createOpenRouterTextCompletion(systemPrompt, userPrompt) {
 
 export async function createOpenRouterVisionCompletion(input) {
   const dataUrl = `data:${input.mimeType};base64,${input.imageBuffer.toString('base64')}`;
-  const visionModel = OPENROUTER_VISION_MODEL;
+  let lastError = null;
 
-  try {
-    const content = await callOpenRouter({
-      model: visionModel,
-      messages: [
-        {
-          role: 'system',
-          content: input.systemPrompt,
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: `Context JSON: ${JSON.stringify(input.contextPayload)}` },
-            { type: 'image_url', image_url: { url: dataUrl } },
-          ],
-        },
-      ],
-      temperature: 0.2,
-    }, 10000); // 10s timeout for vision
+  for (const visionModel of OPENROUTER_VISION_MODELS) {
+    try {
+      const content = await callOpenRouter({
+        model: visionModel,
+        messages: [
+          {
+            role: 'system',
+            content: input.systemPrompt,
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `Context JSON: ${JSON.stringify(input.contextPayload)}` },
+              { type: 'image_url', image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+        temperature: 0.2,
+      }, AI_TIMEOUT_MS);
 
-    return { content, model: visionModel };
-  } catch (err) {
-    console.warn('[OpenRouter Vision] Vision request failed, falling back:', err.message);
-    throw err;
+      if (content && typeof content === 'string') {
+        return { content, model: visionModel };
+      }
+    } catch (err) {
+      console.warn(`[OpenRouter Vision] Vision request with model "${visionModel}" failed:`, err.message);
+      lastError = err;
+    }
   }
+
+  throw lastError || new Error('All OpenRouter vision models failed to respond');
 }

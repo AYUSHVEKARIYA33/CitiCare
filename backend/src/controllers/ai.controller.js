@@ -50,6 +50,7 @@ export async function imageSuggest(req, res) {
     const result = await generateImageSuggestions({
       imageBuffer,
       mimeType: file.mimetype,
+      filename: file.originalname || '',
       title: typeof req.body?.title === 'string' ? req.body.title : '',
       description: typeof req.body?.description === 'string' ? req.body.description : '',
       address: typeof req.body?.address === 'string' ? req.body.address : '',

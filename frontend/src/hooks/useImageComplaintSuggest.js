@@ -11,7 +11,7 @@ export function useImageComplaintSuggest() {
       if (input.address) formData.append('address', input.address);
 
       const { data } = await api.post('/ai/image-suggest', formData, {
-        timeout: 15000,
+        timeout: 45000,
       });
       return data;
     },
