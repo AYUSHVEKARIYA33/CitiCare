@@ -53,9 +53,16 @@ export default function NewComplaint() {
         if (!departments || departments.length === 0) return [];
         if (!category) return departments;
         const matching = departments.filter(dept => dept.category === category);
+        // Guarantee currently selected department is ALWAYS in the dropdown list so it never shows placeholder
+        if (departmentId) {
+            const currentSelected = departments.find(d => d.id === departmentId);
+            if (currentSelected && !matching.some(d => d.id === departmentId)) {
+                return [currentSelected, ...matching];
+            }
+        }
         if (matching.length > 0) return matching;
         return departments;
-    }, [departments, category]);
+    }, [departments, category, departmentId]);
 
     const selectedCategoryLabel = useMemo(() => {
         if (!imageSuggest.data?.category_hint)
@@ -242,52 +249,76 @@ export default function NewComplaint() {
         });
     }, [latestImage, latestImageKey, title, description, address, isImageSuggestPending, suggestFromImage]);
 
-    // Automatically apply suggestions once AI returns data, without overwriting user's typed input
+    // Automatically apply suggestions once AI returns data, updating empty or default fields
     useEffect(() => {
         if (!imageSuggest.data) return;
         const data = imageSuggest.data;
         let appliedAny = false;
 
-        if (data.suggested_title && !title.trim()) {
-            setTitle(data.suggested_title);
-            appliedAny = true;
-        }
-        if (data.suggested_description && !description.trim()) {
-            setDescription(data.suggested_description);
-            appliedAny = true;
-        }
-        if (data.category_hint && !category) {
+        // Auto-fill category if provided
+        if (data.category_hint) {
             setCategory(data.category_hint);
             appliedAny = true;
         }
-        if (data.department_id && !departmentId) {
+
+        // Auto-select department
+        if (data.department_id) {
             setDepartmentId(data.department_id);
+            appliedAny = true;
+        } else if (data.category_hint && departments?.length) {
+            const matchDept = departments.find(d => d.category === data.category_hint);
+            if (matchDept) {
+                setDepartmentId(matchDept.id);
+                appliedAny = true;
+            }
+        }
+
+        // Auto-fill title if user hasn't typed a custom title
+        const isGenericTitle = !title.trim() || title === 'Civic issue reported from uploaded photo';
+        if (data.suggested_title && isGenericTitle) {
+            setTitle(data.suggested_title);
+            appliedAny = true;
+        }
+
+        // Auto-fill description if user hasn't typed a custom description
+        const isGenericDesc = !description.trim() || description.startsWith('Issue detected from uploaded image');
+        if (data.suggested_description && isGenericDesc) {
+            setDescription(data.suggested_description);
             appliedAny = true;
         }
 
         if (appliedAny) {
+            const deptObj = departments?.find(d => d.id === (data.department_id || departmentId));
             toast({
-                title: 'AI Auto-Fill Suggestions Ready',
-                description: 'Fields pre-filled from your photo. You can edit or adjust anytime!',
+                title: 'AI Auto-Fill Applied',
+                description: deptObj ? `Assigned to ${deptObj.name} with details pre-filled.` : 'Category, department, and description filled from your photo.',
             });
         }
-    }, [imageSuggest.data]);
+    }, [imageSuggest.data, departments]);
 
     const applyImageSuggestions = () => {
         if (!imageSuggest.data)
             return;
-        if (imageSuggest.data.suggested_title) {
-            setTitle(imageSuggest.data.suggested_title);
+        const data = imageSuggest.data;
+        if (data.category_hint) {
+            setCategory(data.category_hint);
         }
-        if (imageSuggest.data.suggested_description) {
-            setDescription(imageSuggest.data.suggested_description);
+        if (data.department_id) {
+            setDepartmentId(data.department_id);
+        } else if (data.category_hint && departments?.length) {
+            const matchDept = departments.find(d => d.category === data.category_hint);
+            if (matchDept) setDepartmentId(matchDept.id);
         }
-        if (imageSuggest.data.category_hint) {
-            setCategory(imageSuggest.data.category_hint);
+        if (data.suggested_title) {
+            setTitle(data.suggested_title);
         }
-        if (imageSuggest.data.department_id) {
-            setDepartmentId(imageSuggest.data.department_id);
+        if (data.suggested_description) {
+            setDescription(data.suggested_description);
         }
+        toast({
+            title: 'AI Suggestions Applied',
+            description: 'Updated category, department, title, and description from photo.',
+        });
     };
 
     // Reset department selection when category changes

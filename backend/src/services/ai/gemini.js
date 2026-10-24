@@ -1,7 +1,17 @@
 const GEMINI_API_BASE = process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com/v1beta/models';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-const GEMINI_MODEL_VISION = process.env.GEMINI_MODEL_VISION || GEMINI_MODEL;
-const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 8000);
+const GEMINI_TEXT_MODELS = [
+  process.env.GEMINI_MODEL,
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+].filter(Boolean);
+const GEMINI_VISION_MODELS = [
+  process.env.GEMINI_MODEL_VISION,
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+].filter(Boolean);
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 35000);
 
 function extractGeminiText(payload) {
   const parts = payload.candidates?.[0]?.content?.parts ?? [];
@@ -57,49 +67,65 @@ async function callGemini(model, body) {
 }
 
 export async function createGeminiTextCompletion(systemPrompt, userPrompt) {
-  const content = await callGemini(GEMINI_MODEL, {
-    systemInstruction: {
-      parts: [{ text: systemPrompt }],
-    },
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: userPrompt }],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: 'application/json',
-    },
-  });
-
-  return { content, model: GEMINI_MODEL };
+  let lastError = null;
+  for (const model of GEMINI_TEXT_MODELS) {
+    try {
+      const content = await callGemini(model, {
+        systemInstruction: {
+          parts: [{ text: systemPrompt }],
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: userPrompt }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+        },
+      });
+      return { content, model };
+    } catch (err) {
+      console.warn(`[Gemini Text] Model "${model}" failed:`, err.message);
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('All Gemini text models failed');
 }
 
 export async function createGeminiVisionCompletion(input) {
-  const content = await callGemini(GEMINI_MODEL_VISION, {
-    systemInstruction: {
-      parts: [{ text: input.systemPrompt }],
-    },
-    contents: [
-      {
-        role: 'user',
-        parts: [
-          { text: `Context JSON: ${JSON.stringify(input.contextPayload)}` },
+  let lastError = null;
+  for (const model of GEMINI_VISION_MODELS) {
+    try {
+      const content = await callGemini(model, {
+        systemInstruction: {
+          parts: [{ text: input.systemPrompt }],
+        },
+        contents: [
           {
-            inline_data: {
-              mime_type: input.mimeType,
-              data: input.imageBuffer.toString('base64'),
-            },
+            role: 'user',
+            parts: [
+              { text: `Context JSON: ${JSON.stringify(input.contextPayload)}` },
+              {
+                inline_data: {
+                  mime_type: input.mimeType,
+                  data: input.imageBuffer.toString('base64'),
+                },
+              },
+            ],
           },
         ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: 'application/json',
-    },
-  });
-
-  return { content, model: GEMINI_MODEL_VISION };
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+        },
+      });
+      return { content, model };
+    } catch (err) {
+      console.warn(`[Gemini Vision] Model "${model}" failed:`, err.message);
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('All Gemini vision models failed');
 }
