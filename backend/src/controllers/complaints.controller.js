@@ -7,6 +7,7 @@ import { getNextComplaintNumber } from '../models/ComplaintCounter.js';
 import { Department } from '../models/Department.js';
 import { sendNotification } from '../services/notification/notification.service.js';
 import { calculateSlaDeadline } from '../services/sla/sla.service.js';
+import { uploadImageFile, deleteMultipleCloudinaryAssets } from '../services/storage/cloudinary.js';
 
 const baseUrl = process.env.API_BASE_URL || '';
 
@@ -61,6 +62,8 @@ function complaintToCommunityJson(c, extra) {
           url: img?.url ?? '',
           caption: img?.caption ?? null,
           type: img?.type ?? 'general',
+          storage_provider: img?.storage_provider ?? 'cloudinary',
+          created_at: img?.createdAt ?? img?.created_at ?? null,
         }))
       : [],
     accepted_by_department: null,
@@ -149,6 +152,11 @@ function complaintToJson(c, extra) {
           url: img?.url ?? '',
           caption: img?.caption ?? null,
           type: img?.type ?? 'general',
+          storage_provider: img?.storage_provider ?? 'cloudinary',
+          uploader_id: toId(img?.uploader_id),
+          uploader_role: img?.uploader_role ?? null,
+          contractor_id: toId(img?.contractor_id),
+          created_at: img?.createdAt ?? img?.created_at ?? null,
         }))
       : [],
     accepted_by_department: c?.accepted_by_department ?? null,
@@ -231,13 +239,7 @@ export async function listComplaints(req, res) {
     for (const img of allImages) {
       const cid = img.complaint_id.toString();
       if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
-      imagesByComplaint.get(cid).push({
-        id: img._id?.toString?.() ?? '',
-        complaint_id: cid,
-        url: img.url ?? '',
-        caption: img.caption ?? null,
-        type: img.type ?? 'general',
-      });
+      imagesByComplaint.get(cid).push(img);
     }
 
     const withImages = list.map((c) => {
@@ -400,13 +402,7 @@ export async function listNearbyComplaints(req, res) {
     for (const img of allImages) {
       const cid = img.complaint_id.toString();
       if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
-      imagesByComplaint.get(cid).push({
-        id: img._id.toString(),
-        complaint_id: cid,
-        url: img.url,
-        caption: img.caption,
-        type: img.type ?? 'general',
-      });
+      imagesByComplaint.get(cid).push(img);
     }
 
     const withImages = nearby.map((c) => {
@@ -465,13 +461,7 @@ export async function listWardNearbyComplaints(req, res) {
     for (const img of allImages) {
       const cid = img.complaint_id.toString();
       if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
-      imagesByComplaint.get(cid).push({
-        id: img._id.toString(),
-        complaint_id: cid,
-        url: img.url,
-        caption: img.caption,
-        type: img.type ?? 'general',
-      });
+      imagesByComplaint.get(cid).push(img);
     }
 
     const withImages = list.map((c) => {
@@ -526,13 +516,7 @@ export async function listComplaintsByWard(req, res) {
     for (const img of allImages) {
       const cid = img.complaint_id.toString();
       if (!imagesByComplaint.has(cid)) imagesByComplaint.set(cid, []);
-      imagesByComplaint.get(cid).push({
-        id: img._id.toString(),
-        complaint_id: cid,
-        url: img.url,
-        caption: img.caption,
-        type: img.type ?? 'general',
-      });
+      imagesByComplaint.get(cid).push(img);
     }
 
     const withImages = list.map((c) => {
@@ -727,20 +711,13 @@ export async function getComplaintById(req, res) {
     }
 
     const images = await ComplaintImage.find({ complaint_id: id }).lean();
-    const urls = images.map((i) => ({
-      id: i._id.toString(),
-      complaint_id: i.complaint_id?.toString?.() ?? null,
-      url: i.url,
-      caption: i.caption,
-      type: i.type ?? 'general',
-    }));
     const upvotedByUser = Array.isArray(c.upvoted_by)
       ? c.upvoted_by.some((u) => (u?._id?.toString ? u._id.toString() : u?.toString()) === req.user.id)
       : false;
 
     const complaintData = {
       ...c,
-      complaint_images: urls,
+      complaint_images: images,
       departments: c.department_id,
       zones: c.zone_id,
       wards: c.ward_id,
@@ -767,9 +744,8 @@ export async function createComplaint(req, res) {
       return;
     }
     const complaint_number = await getNextComplaintNumber();
-    const files = req.files;
+    const files = req.files || [];
     const publicBaseUrl = getPublicBaseUrl(req);
-    const imageUrls = (files || []).map((f) => `${publicBaseUrl}/uploads/${f.filename}`);
     const toObjectId = (v) => (v && mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(v) : null);
 
     let assigned_to = null;
@@ -804,8 +780,47 @@ export async function createComplaint(req, res) {
       latitude,
       longitude,
     });
-    if (imageUrls.length > 0) {
-      await ComplaintImage.insertMany(imageUrls.map((url) => ({ complaint_id: complaint._id, url, type: 'general' })));
+
+    const uploadedPublicIds = [];
+    if (files.length > 0) {
+      const imageDocs = [];
+      for (const file of files) {
+        try {
+          const uploaded = await uploadImageFile(file, {
+            folder: 'citicare/complaints',
+            publicBaseUrl,
+          });
+          if (uploaded.public_id) {
+            uploadedPublicIds.push(uploaded.public_id);
+          }
+          imageDocs.push({
+            complaint_id: complaint._id,
+            url: uploaded.secure_url,
+            public_id: uploaded.public_id || null,
+            storage_provider: uploaded.storage_provider || 'cloudinary',
+            type: 'general',
+            uploader_id: req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : null,
+            uploader_role: req.user?.role || 'citizen',
+            file_size: uploaded.bytes || file.size || null,
+            mime_type: file.mimetype || null,
+            width: uploaded.width || null,
+            height: uploaded.height || null,
+            format: uploaded.format || null,
+          });
+        } catch (uploadError) {
+          console.error('[createComplaint] Error uploading individual image:', uploadError);
+        }
+      }
+      if (imageDocs.length > 0) {
+        try {
+          await ComplaintImage.insertMany(imageDocs);
+        } catch (dbError) {
+          console.error('[createComplaint] Error saving complaint images to database:', dbError);
+          if (uploadedPublicIds.length > 0) {
+            await deleteMultipleCloudinaryAssets(uploadedPublicIds).catch(() => {});
+          }
+        }
+      }
     }
 
     // Send database notifications in background without blocking response
@@ -845,7 +860,7 @@ export async function createComplaint(req, res) {
       complaintToJson(
         {
           ...populated,
-          complaint_images: images.map((i) => ({ id: i._id.toString(), complaint_id: i.complaint_id?.toString?.() ?? null, url: i.url, caption: i.caption })),
+          complaint_images: images,
           departments: populated?.department_id,
           zones: populated?.zone_id,
           wards: populated?.ward_id,
@@ -1191,7 +1206,7 @@ export async function updateComplaint(req, res) {
     res.json(
       complaintToJson({
         ...c,
-        complaint_images: images.map((i) => ({ id: i._id.toString(), complaint_id: i.complaint_id?.toString?.() ?? null, url: i.url, caption: i.caption, type: i.type ?? 'general' })),
+        complaint_images: images,
         departments: c.department_id,
         zones: c.zone_id,
         wards: c.ward_id,
@@ -1209,22 +1224,12 @@ export async function uploadComplaintImages(req, res) {
   try {
     const complaintId = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(complaintId)) {
-      if (req.files) {
-        for (const file of req.files) {
-          try { fs.unlinkSync(file.path); } catch {}
-        }
-      }
       res.status(400).json({ error: 'Invalid complaint id' });
       return;
     }
 
     const type = req.body.type || 'general';
     if (!['before', 'after', 'general'].includes(type)) {
-      if (req.files) {
-        for (const file of req.files) {
-          try { fs.unlinkSync(file.path); } catch {}
-        }
-      }
       res.status(400).json({ error: 'type must be before, after, or general' });
       return;
     }
@@ -1245,9 +1250,6 @@ export async function uploadComplaintImages(req, res) {
       .lean();
 
     if (!c) {
-      for (const file of files) {
-        try { fs.unlinkSync(file.path); } catch {}
-      }
       res.status(404).json({ error: 'Complaint not found' });
       return;
     }
@@ -1271,32 +1273,68 @@ export async function uploadComplaintImages(req, res) {
 
     // Disallow unauthorized users
     if (!isStaff && !isOwner) {
-      for (const file of files) {
-        try { fs.unlinkSync(file.path); } catch {}
-      }
       res.status(403).json({ error: 'You do not have permission to attach images to this complaint' });
       return;
     }
 
     // Only staff, assigned contractors, or admins can upload before/after work evidence photos
     if ((type === 'before' || type === 'after') && !isStaff) {
-      for (const file of files) {
-        try { fs.unlinkSync(file.path); } catch {}
-      }
       res.status(403).json({ error: 'Only municipal officers, assigned contractors, and administrators can upload work evidence (before/after photos)' });
       return;
     }
 
     const publicBaseUrl = getPublicBaseUrl(req);
-    const urls = files.map((f) => `${publicBaseUrl}/uploads/${f.filename}`);
     const complaintObjectId = new mongoose.Types.ObjectId(complaintId);
-    await ComplaintImage.insertMany(urls.map((url) => ({ complaint_id: complaintObjectId, url, type })));
+    const uploadedPublicIds = [];
+    const imageDocs = [];
+
+    const contractorId = c.assigned_contractor_id
+      ? toId(c.assigned_contractor_id)
+      : userRole === 'contractor'
+      ? userId
+      : null;
+
+    try {
+      for (const file of files) {
+        const uploaded = await uploadImageFile(file, {
+          folder: `citicare/complaints/${type}`,
+          publicBaseUrl,
+        });
+        if (uploaded.public_id) {
+          uploadedPublicIds.push(uploaded.public_id);
+        }
+        imageDocs.push({
+          complaint_id: complaintObjectId,
+          url: uploaded.secure_url,
+          public_id: uploaded.public_id || null,
+          storage_provider: uploaded.storage_provider || 'cloudinary',
+          type,
+          uploader_id: userId ? new mongoose.Types.ObjectId(userId) : null,
+          uploader_role: userRole || null,
+          contractor_id: contractorId ? new mongoose.Types.ObjectId(contractorId) : null,
+          file_size: uploaded.bytes || file.size || null,
+          mime_type: file.mimetype || null,
+          width: uploaded.width || null,
+          height: uploaded.height || null,
+          format: uploaded.format || null,
+        });
+      }
+
+      await ComplaintImage.insertMany(imageDocs);
+    } catch (uploadErr) {
+      console.error('[uploadComplaintImages] Error during upload or DB write:', uploadErr);
+      if (uploadedPublicIds.length > 0) {
+        await deleteMultipleCloudinaryAssets(uploadedPublicIds).catch(() => {});
+      }
+      res.status(500).json({ error: 'Failed to upload images' });
+      return;
+    }
 
     const images = await ComplaintImage.find({ complaint_id: complaintId }).lean();
     res.json(
       complaintToJson({
         ...c,
-        complaint_images: images.map((i) => ({ id: i._id.toString(), complaint_id: i.complaint_id?.toString?.() ?? null, url: i.url, caption: i.caption, type: i.type ?? 'general' })),
+        complaint_images: images,
         departments: c.department_id,
         zones: c.zone_id,
         wards: c.ward_id,
@@ -1331,6 +1369,15 @@ export async function deleteComplaint(req, res) {
     if (!isAdmin && !(isOwner && isPending)) {
       res.status(403).json({ error: 'You do not have permission to delete this complaint' });
       return;
+    }
+
+    // Clean up any persistent Cloudinary assets associated with this complaint
+    const complaintImages = await ComplaintImage.find({ complaint_id: req.params.id }).select('public_id').lean();
+    const publicIds = complaintImages.map((img) => img.public_id).filter(Boolean);
+    if (publicIds.length > 0) {
+      await deleteMultipleCloudinaryAssets(publicIds).catch((err) => {
+        console.warn('[deleteComplaint] Failed to delete Cloudinary images:', err.message);
+      });
     }
 
     await ComplaintComment.deleteMany({ complaint_id: req.params.id });

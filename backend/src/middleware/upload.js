@@ -1,13 +1,5 @@
 import multer from 'multer';
 import path from 'path';
-import { randomBytes } from 'crypto';
-
-import fs from 'fs';
-
-const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
 
 const MIME_EXTENSION_MAP = {
   'image/jpeg': '.jpg',
@@ -19,18 +11,7 @@ const MIME_EXTENSION_MAP = {
   'image/webp': '.webp',
 };
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (_req, file, cb) => {
-    const mime = file.mimetype?.toLowerCase();
-    const ext = MIME_EXTENSION_MAP[mime] || path.extname(file.originalname || '').toLowerCase() || '.jpg';
-    const safeExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext) ? ext : '.jpg';
-    const name = `${randomBytes(12).toString('hex')}-${Date.now()}${safeExt}`;
-    cb(null, name);
-  },
-});
+const storage = multer.memoryStorage();
 
 export const upload = multer({
   storage,
