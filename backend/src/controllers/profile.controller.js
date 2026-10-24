@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { User } from '../models/User.js';
 import { Department } from '../models/Department.js';
 import { Ward } from '../models/Ward.js';
+import { uploadImageFile } from '../services/storage/cloudinary.js';
 
 export async function getProfile(req, res) {
   try {
@@ -93,8 +94,12 @@ export async function uploadAvatar(req, res) {
       res.status(400).json({ error: 'No file uploaded' });
       return;
     }
-    const baseUrl = process.env.API_BASE_URL || 'http://localhost:5000';
-    const avatarUrl = `${baseUrl}/uploads/${file.filename}`;
+    const publicBaseUrl = (process.env.API_BASE_URL || 'http://localhost:5000').replace(/\/$/, '');
+    const uploaded = await uploadImageFile(file, {
+      folder: 'citicare/avatars',
+      publicBaseUrl,
+    });
+    const avatarUrl = uploaded.secure_url;
     await User.findByIdAndUpdate(req.user.id, { avatar_url: avatarUrl });
     res.json({ avatar_url: avatarUrl });
   } catch (e) {

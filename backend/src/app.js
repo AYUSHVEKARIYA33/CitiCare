@@ -47,8 +47,12 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow non-browser requests or allowed origins
-      if (!origin || allowedOrigins.includes(origin)) {
+      // Allow non-browser requests, exact allowed origins, or Vercel preview/production domains
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        (typeof origin === 'string' && /^https:\/\/[a-z0-9-_.]+\.vercel\.app$/i.test(origin))
+      ) {
         callback(null, true);
       } else {
         callback(new Error('Blocked by CORS policy'));

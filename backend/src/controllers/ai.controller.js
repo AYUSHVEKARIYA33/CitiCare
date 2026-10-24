@@ -34,12 +34,12 @@ export async function imageSuggest(req, res) {
   const file = req.file;
 
   try {
-    if (!file?.path || !file.mimetype) {
+    const imageBuffer = file?.buffer || (file?.path ? await readFile(file.path) : null);
+    if (!imageBuffer || !file?.mimetype) {
       res.status(400).json({ error: 'Image file is required' });
       return;
     }
 
-    const imageBuffer = await readFile(file.path);
     let departments = [];
     try {
       departments = await Department.find().select('_id name category').lean();
